@@ -1,0 +1,17 @@
+;; obsolete
+(ns {{ns}})
+
+{{#tags}}
+(defmacro {{tag}}
+  "{{docstring}}"
+  [& args]
+  (let [args (flatten args)
+        tag-meta {:co-fn true :elt-kw {{tag}} :elt-uri "foo/bar" :doc "{{docstring}}"}]
+    (if (empty? args)
+          `(with-meta (element ~{{tag}}) ~tag-meta)
+      (let [first# (first args)
+            rest#  (rest args)
+            [attrs# content#] (parse-elt-args first# rest#)]
+        `(with-meta (apply element ~{{tag}} attrs# content#) ~tag-meta)])))
+
+{{/tags}}

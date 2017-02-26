@@ -1,0 +1,614 @@
+(ns miraj.boot-miraj
+  {:boot/export-tasks true}
+  (:refer-clojure :exclude [compile])
+  (:require [clojure.java.io              :as io]
+            [clojure.set                  :as set]
+            [clojure.string               :as str]
+            [clojure.tools.namespace.repl :as ctnr :refer [refresh set-refresh-dirs]]
+            [miraj.core                   :as miraj]
+            [miraj.compiler               :as wc]
+            [stencil.core                 :as stencil]
+            [boot.pod                     :as pod]
+            [boot.core                    :as boot]
+            [boot.util                    :as util :refer [dbug info]]
+            [boot.task.built-in           :as builtin]))
+
+(defn ns->path
+  [n]
+  (let [nss (str n)
+        nspath (str (-> nss (str/replace \- \_) (str/replace "." "/")))]
+    nspath))
+
+(defn- find-mainfiles [fs]
+  (->> fs
+       boot/input-files
+       (boot/by-ext [".clj"])))
+
+#_(defn do-build
+  [f]
+  (println "aot-compile task: " ~(boot/tmp-path f))
+
+  ;; TODO: load the files and filter for components here, THEN call build-components
+
+  (miraj.co-dom/build-component ~(.getPath (boot/tmp-file f))))
+
+(def ^:private deps
+  '[[miraj/co-dom "0.1.0-SNAPSHOT"]])
+
+(def webcomponents-edn "webcomponents.edn")
+(def webstyles-edn     "webstyles.edn")
+(def webextensions-edn "webextensions.edn")
+
+;; this works from edn files. for deflibrary vars, use link-component-lib
+(defn- compile-library
+  [verbose]
+  (fn middleware [next-handler]
+    (fn handler [fileset]
+      (if verbose (util/info "Running fn 'compile-library'\n"))
+      (let [workspace (boot/tmp-dir!)
+
+            webcomponents-edn-files (->> fileset
+                                         boot/input-files
+                                         (boot/by-re [(re-pattern (str webcomponents-edn "$"))]))
+            webcomponents-edn-f (condp = (count webcomponents-edn-files)
+                                  0 (throw (Exception. webcomponents-edn-files " file not found"))
+                                  1 (first webcomponents-edn-files)
+                                  (throw (Exception.
+                                          (str "Only one " webcomponents-edn " file allowed"))))
+            webcomponents-edn-map (-> (boot/tmp-file webcomponents-edn-f) slurp read-string)
+            ;; _ (println "webcomponents-edn-map: " webcomponents-edn-map)
+
+            webextensions-edn-files (->> fileset
+                                     boot/input-files
+                                     (boot/by-re [(re-pattern (str webextensions-edn "$"))]))
+            webextensions-edn-f (if webextensions-edn-files
+                              (condp = (count webextensions-edn-files)
+                                0 nil
+                                1 (first webextensions-edn-files)
+                                (throw (Exception.
+                                        (str "Only one " webextensions-edn " file allowed"))))
+                              nil)
+            webextensions-edn-map (if webextensions-edn-f
+                                (-> (boot/tmp-file webextensions-edn-f) slurp read-string) nil)
+            ;; _ (println "webextensions-edn-map: " webextensions-edn-map)
+
+            target-middleware identity
+            target-handler (target-middleware next-handler)]
+        (doseq [component webcomponents-edn-map]
+          (let [content (stencil/render-file
+                         "miraj/boot_miraj/webcomponents.mustache"
+                         component)
+                component-out-path (str (ns->path (:miraj/ns component)) ".clj")
+                component-out-file (doto (io/file workspace component-out-path) io/make-parents)]
+            (spit component-out-file content)))
+        (if webextensions-edn-map
+          (doseq [behavior webextensions-edn-map]
+            (let [content (stencil/render-file
+                           "miraj/boot_miraj/behaviors.mustache"
+                           (merge {:properties [] :listeners false} behavior))
+                  behavior-out-path (str (ns->path (:ns behavior)) ".clj")
+                  behavior-out-file (doto (io/file workspace behavior-out-path) io/make-parents)]
+              (spit behavior-out-file content))))
+        (target-handler (-> fileset
+                            (boot/add-resource workspace)
+                            boot/commit!))))))
+
+(defn- compile-styles
+  [verbose]
+  (fn middleware [next-handler]
+    (fn handler [fileset]
+      (if verbose (util/info "Running fn 'compile-styles'\n"))
+      (let [workspace (boot/tmp-dir!)
+            webstyles-edn-files (->> fileset
+                                         boot/input-files
+                                         (boot/by-re [(re-pattern (str webstyles-edn "$"))]))
+            webstyles-edn-f (condp = (count webstyles-edn-files)
+                                  0 (throw (Exception. webstyles-edn-files " file not found"))
+                                  1 (first webstyles-edn-files)
+                                  (throw (Exception.
+                                          (str "Only one " webstyles-edn " file allowed"))))
+            webstyles-edn-map (-> (boot/tmp-file webstyles-edn-f) slurp read-string)
+            ;; _ (util/info (format "webstyles-edn-map: %s\n" webstyles-edn-map))
+
+            target-middleware identity
+            target-handler (target-middleware next-handler)]
+        (doseq [style webstyles-edn-map]
+          (let [content (stencil/render-file
+                         "miraj/boot_miraj/webstyles.mustache"
+                         style)
+                style-out-path (str (ns->path (:miraj/ns style)) ".clj")
+                style-out-file (doto (io/file workspace style-out-path) io/make-parents)]
+            (spit style-out-file content)))
+        (target-handler (-> fileset
+                            (boot/add-resource workspace)
+                            boot/commit!))))))
+
+(defn- compile-component-nss
+  "Compile webcomponent namespaces."
+  [namespace-set keep pprint verbose]
+  (fn middleware [next-handler]
+    (fn handler [fileset]
+      (if verbose (util/info (format "Running fn 'compile-component-nss' for %s\n" namespace-set)))
+      (let [html-workspace (boot/tmp-dir!)
+            cljs-workspace (boot/tmp-dir!)
+            cljs-handler (if keep boot/add-resource boot/add-source)
+            out-pfx "" ;;"assets"
+            target-middleware identity
+            target-handler (target-middleware next-handler)]
+        (binding [*compile-path* (.getPath cljs-workspace)]
+          (wc/compile-webcomponents-cljs namespace-set pprint verbose))
+          ;; (wc/compile-webcomponent-nss :cljs namespace-set pprint verbose))
+        (binding [*compile-path* (.getPath (doto (io/file html-workspace out-pfx) io/make-parents))]
+          ;;(.getPath html-workspace)]
+          (wc/compile-webcomponent-nss :html namespace-set pprint verbose))
+        (target-handler (-> fileset
+                            (cljs-handler cljs-workspace)
+                            (boot/add-asset html-workspace)
+                            boot/commit!))))))
+
+(defn- compile-page-nss
+  "Compile page namespaces"
+  [namespace-set pprint verbose]
+  (fn middleware [next-handler]
+    (fn handler [fileset]
+      ;; (if verbose (util/info (format "Running fn 'compile-page-nss' for %s\n" namespace-set)))
+      (let [workspace (boot/tmp-dir!)
+            target-middleware identity
+            target-handler (target-middleware next-handler)]
+        (binding [*compile-path* (.getPath workspace)]
+          (wc/compile-page-nss namespace-set pprint verbose))
+        (target-handler (-> fileset (boot/add-resource workspace) boot/commit!))))))
+
+(defn- compile-page-vars
+  "Compile page vars."
+  [page-var-set pprint verbose]
+  (fn middleware [next-handler]
+    (fn handler [fileset]
+      ;; (if verbose (util/info (format "Running fn 'compile-page-vars' for %s\n" page-var-set)))
+      (let [workspace   (boot/tmp-dir!)
+            target-middleware identity
+            target-handler (target-middleware next-handler)]
+        (doseq [[idx pv] (map-indexed vector page-var-set)]
+          (let [ns (symbol (->  pv namespace))]
+            (binding [*compile-path* (.getPath workspace)]
+                (require ns)
+                (wc/compile-page-var (find-var pv) pprint verbose))))
+        (target-handler (-> fileset (boot/add-resource workspace) boot/commit!))))))
+
+(boot/deftask assetize
+  "Install assets from miraj dependencies."
+  [v verbose bool "Print trace messages"]
+
+  ;; [c configs EDN  edn "config spec"
+  ;;  n namespaces NSS #{str} "root dir for component output"
+  ;;  r root    PATH str "root dir for component output"]
+  (println "TASK: miraj/assetize")
+  (let [workspace (boot/tmp-dir!)
+        env (boot/get-env)
+        ;; pod          (-> env
+        ;;                  pod/make-pod  ;; use pod-pool?
+        ;;                  future)
+        deps  (seq (:dependencies env))
+        _ (println "DEPS: " deps)
+        deps (filter #(= "miraj" (:scope (pod/coord->map %))) deps)
+        _ (set (for [d deps] (println "MIRAJ DEP: " d)))
+
+
+        webjars (set (for [d deps] (pod/resolve-dependency-jar env d)))
+        ]
+    (println "webjars: " webjars)
+    (boot/with-pre-wrap fileset
+      (let [out-dir (io/file workspace)]
+        (doseq [webjar webjars]
+          (pod/unpack-jar webjar out-dir)))
+      (-> fileset (boot/add-asset workspace :exclude [#"META-INF.*"]) boot/commit!))))
+
+(boot/deftask compile
+  "Compile miraj components, pages, etc. Default is to compile
+  everything in all namespaces. Use -m to compile one miraj var, -n to
+  compile all miraj vars in a namespace."
+  [;;a all        bool        "Compile all page vars in all miraj namespaces to HTML."
+   c component NS  #{sym}   "Compile webcomponent namespace."
+   d debug      bool        "Debug mode - pretty-print, keep, etc."
+   k keep       bool        "Keep transient work products (e.g. cljs files)."
+   l library    bool        "Generate Clojure libraries from webcomponents.edn files."
+   m miraj-var    SYM  #{sym} "Compile miraj var."
+   n namespace  NS  #{sym}  "Compile all miraj vars in namespace NS."
+   p pprint     bool        "Pretty-print generated HTML."
+   s style      bool        "Compile webstyles.edn files."
+   v verbose    bool        "verbose"]
+  (let [all (and (empty? namespace) (empty? miraj-var))
+        keep (or keep debug)
+        verbose (or verbose debug)]
+    (fn middleware [next-handler]
+      (fn handler [fileset]
+        (if verbose (util/info "Running task 'compile'\n"))
+        (let [target-middleware (comp
+                                 (if all
+                                   (comp
+                                    (compile-page-nss (->> fileset boot/fileset-namespaces)
+                                                      pprint verbose)
+                                    (compile-component-nss (->> fileset boot/fileset-namespaces)
+                                                           keep pprint verbose))
+                                   identity)
+
+                                 (if component
+                                   (compile-component-nss component keep pprint verbose)
+                                   identity)
+
+                                 (if library (compile-library verbose) identity)
+
+                                 (if (not (empty? namespace))
+                                   (compile-page-nss namespace pprint verbose)
+                                   identity)
+
+                                 (if style (compile-styles verbose) identity)
+
+                                 (if (not (empty? miraj-var))
+                                   (compile-page-vars miraj-var pprint verbose)
+                                   identity)
+
+                                 (if (or all component library namespace style miraj-var)
+                                   identity
+                                   (do
+                                     (util/warn (str "WARNNING: nothing compiled. Please specify --components, --library, --namespace, --style, or --page.\n"))
+                                     identity)))
+              target-handler (target-middleware next-handler)]
+          (target-handler fileset))))))
+
+;; OBSOLETE - use link instead
+(boot/deftask assemble
+  "Processes deflibrary vars to link webcomponent libraries."
+  [n namespace NS sym "namespace for library (NOT the implementation namespace of the components)."
+   p pprint     bool        "Pretty-print generated HTML."
+   v verbose bool "verbose"]
+  (fn middleware [next-handler]
+    (fn handler [fileset]
+      (if verbose (util/info (format "Running task 'assemble' for namespace %s\n" namespace)))
+      (let [all-nses (->> fileset boot/fileset-namespaces)]
+        (doseq [app-ns all-nses]
+          (util/dbug "Requiring ns: " app-ns)
+          (require app-ns)))
+      (let [workspace (boot/tmp-dir!)
+            target-middleware identity
+            target-handler (target-middleware next-handler)]
+        (binding [*compile-path* (.getPath workspace)]
+          (wc/assemble-component-lib-for-ns namespace pprint verbose))
+        (target-handler (-> fileset (boot/add-resource workspace) boot/commit!))))))
+
+(boot/deftask link
+  "Processes deflibrary vars to link webcomponent libraries."
+  [;;p pprint     bool        "Pretty-print generated HTML."
+   v verbose bool "verbose"]
+  (fn middleware [next-handler]
+    (fn handler [fileset]
+      (if verbose (util/info (format "Running task 'link'\n")))
+      (let [workspace (boot/tmp-dir!)
+            nss-syms (->> fileset boot/fileset-namespaces)
+            target-middleware identity
+            target-handler (target-middleware next-handler)]
+        (binding [*compile-path* (.getPath workspace)]
+          (wc/link-component-libs nss-syms verbose)
+          (wc/link-pages nss-syms verbose))
+        (target-handler (-> fileset (boot/add-resource workspace) boot/commit!))))))
+
+(boot/deftask config
+  "config component resources for web app"
+  [c configs EDN  edn "config spec"
+   n namespaces NSS #{str} "root dir for component output"
+   r root    PATH str "root dir for component output"]
+  (println "TASK: miraj/config")
+  (let [tmp-dir (boot/tmp-dir!)
+        pod          (-> (boot/get-env)
+                         pod/make-pod  ;; use pod-pool?
+                         future)]
+    (boot/with-pre-wrap fileset
+      (doseq [[ns-sym config] configs]
+        (println "config: " ns-sym config)
+        (require ns-sym)
+        (let [ns-interns (ns-interns ns-sym)]
+          (doseq [[csym cvar] ns-interns]
+            (if (:component (meta cvar))
+              (let [path (str/join "/" [(str/replace (str (:ns (meta cvar))) #"\." "/")])
+                    html (str csym ".html")
+                    cljs (str csym ".cljs")
+                    html-in-path (str/join "/" ["miraj" path html])
+                    cljs-in-path (str/join "/" ["miraj" path cljs])
+                    html-out-path (str/join "/" [(.getPath (io/file tmp-dir))
+                                                 (:resources config)
+                                                 path csym html])
+                    cljs-out-path (str/join "/" [(.getPath (io/file tmp-dir))
+                                                 (:resources config)
+                                                 path csym cljs])]
+                (println "COMPONENT: " cvar)
+                (println "\t" html-in-path " -> " html-out-path)
+            (pod/with-eval-in @pod
+              (require '[boot.pod :as pod])
+              (pod/copy-resource ~html-in-path ~html-out-path)
+              (pod/copy-resource ~cljs-in-path ~cljs-out-path))))))
+        (boot/sync! root tmp-dir))
+        fileset)))
+
+(boot/deftask install-polymer
+  "Cache bower polymer packages"
+  [c clean-cache bool "clean reinstall (empty cache at start)"
+   p pkg-name PKG str "package name"
+   t pkg-type PGKMGR kw "one of :bower, :npm :polymer, or :webjars; default is all 4)"
+   v verbose bool "verbose"]
+  (println "install-polymer: " pkg-name pkg-type)
+  (let [workspace     (boot/tmp-dir!)
+        bower-cache (boot/cache-dir! :bowdlerize/bower :global true)
+        _ (if clean-cache (do (if verbose (util/info (str "Cleaning bower cache\n")))
+                              (boot/empty-dir! bower-cache)))
+        local-bower  (io/as-file "./node_modules/bower/bin/bower")
+        global-bower (io/as-file "/usr/local/bin/bower")
+        bcmd        (cond (.exists local-bower) (.getPath local-bower)
+                          (.exists global-bower) (.getPath global-bower)
+                          :else "bower")]
+    (boot/with-pre-wrap fileset
+      (boot/empty-dir! workspace)
+      (let [deps (->> (boot/get-env) :dependencies)
+            polymers  (filter #(= :polymer (:webcomponents (util/dep-as-map %))) deps)
+            _ (doseq [p polymers] (println "polymer: " p))
+
+            pod-env (update-in (boot/get-env) [:dependencies]
+                               #(identity %2)
+                               '[[boot/aether "RELEASE"]
+                                 [boot/core "RELEASE"]
+                                 [boot/pod "RELEASE"]])
+            pod (future (pod/make-pod pod-env))
+
+            ;; [bowdlerize-f edn-content pod] (->bowdlerize-pod fileset)
+            ;; bower-specs {pkg-type (get edn-content pkg-type)}
+            ;; bower-pkgs (if pkg-name
+            ;;              (list pkg-name)
+            ;;              (get-bower-pkgs bower-specs))
+            ]
+        ;; (println "bower-specs: " bower-specs)
+        ;; (println "bower-pkgs: " bower-pkgs)
+        #_(if (empty? bower-pkgs)
+          fileset
+          (do (if verbose (util/info (str "Installing " pkg-type " packages\n")))
+              (pod/with-eval-in @pod
+                (require '[boot.pod :as pod] '[boot.util :as util]
+                         '[clojure.java.io :as io] '[clojure.string :as str]
+                         '[clojure.java.shell :refer [sh]])
+                (doseq [bower-pkg '~bower-pkgs]
+                  (let [_ (println "PKG: " bower-pkg)
+                        seg (subs (str (first bower-pkg)) 1)
+                        path (str ~bower-repo "/" (last bower-pkg))
+                        repo-file (io/file ~(.getPath bower-cache) seg)]
+                    (println "REPO-FILE: " repo-file)
+                    ;;(println "PATH: " path)
+                    (if (.exists repo-file)
+                      (if ~verbose (util/info (format "Found cached bower pkg: %s\n" bower-pkg)))
+                      (let [c [~bcmd "install" (fnext bower-pkg) :dir ~(.getPath bower-cache)]]
+                        (println "bower cmd: " c)
+                        (if ~verbose (util/info (format "Installing bower pkg:   %s\n" bower-pkg)))
+                        (apply sh c)))))))))
+      (-> fileset (boot/add-asset bower-cache) boot/commit!))))
+
+#_(defn hcompile-pod-env
+  [current-env]
+  (assoc current-env
+         :directories (boot/env->directories current-env)
+         :dependencies (concat (:dependencies current-env)
+                               @@(resolve 'boot.repl/*default-dependencies*))
+         :middleware @@(resolve 'boot.repl/*default-middleware*)))
+
+(boot/deftask webdeps
+  "Download and cache web resource dependencies."
+  [c clean       bool  "clear cache"
+   k keep                     bool  "keep intermediate products"
+   n ns-str          NS       str  "namespace from which to extract commponents"
+   r root-output-dir PATH     str  "relative root of html and cljs output paths. Default: 'miraj'"
+   a assets-output-dir PATH     str  "relative root fro assets output. Default: '.'"
+   m html-output-dir PATH     str  "relative root for HTML output. Default '.'"
+   j cljs-output-dir PATH     str  "relative root for cljs output. Default '.'"
+   v verbose bool "verbose"]
+   ;; ack: https://github.com/Lambda-X/lambone/blob/master/resources/leiningen/new/lambone/common/dev/boot.clj
+   ;; 1. launch repl
+   ;; 2. refresh (ctn)
+   ;; 3  miraj/hcompile
+  (println "TASK: webdeps")
+  (let [;; pod-env (hcompile-pod-env (:env options))
+        ;; pod-env (boot/get-env)
+        ;; ;; pod-env (update-in (boot/get-env) [:dependencies] conj '[miraj/core "0.1.0-SNAPSHOT"])
+        ;; pod (future (pod/make-pod pod-env))
+        ;; {:keys [port init-ns]} (:repl options)]
+
+        bower-cache (boot/cache-dir! :bowdlerize/bower :global true)]
+    ;; (comp
+     ;;(boot/with-pre-wrap fileset
+       (apply set-refresh-dirs (-> pod/env :directories))
+       (let [cfg-map (wc/webdeps bower-cache)
+             cfg-path (str/join "/" [(.getPath bower-cache) "bowdlerize.edn"])]
+         (spit cfg-path cfg-map)
+         (println "CONFIG MAP: " cfg-path))))
+
+#_(boot/deftask webc
+  "web compile"
+  [f miraj-file      FILE     str  "input file. If not present, all .clj files will be processed."
+   c component       VAR      str  "component to extract.  Must be namespace qualified."
+   k keep                     bool  "keep intermediate products"
+   n ns-str          NS       str  "namespace from which to extract commponents"
+   r root-output-dir PATH     str  "relative root of html and cljs output paths. Default: 'miraj'"
+   a assets-output-dir PATH     str  "relative root fro assets output. Default: '.'"
+   m html-output-dir PATH     str  "relative root for HTML output. Default '.'"
+   j cljs-output-dir PATH     str  "relative root for cljs output. Default '.'"]
+   ;; ack: https://github.com/Lambda-X/lambone/blob/master/resources/leiningen/new/lambone/common/dev/boot.clj
+   ;; 1. launch repl
+   ;; 2. refresh (ctn)
+   ;; 3  miraj/hcompile
+  (println "TASK: webc")
+  (let [;; pod-env (hcompile-pod-env (:env options))
+        pod-env (boot/get-env)
+        ;; pod-env (update-in (boot/get-env) [:dependencies] conj '[miraj/core "0.1.0-SNAPSHOT"])
+        pod (future (pod/make-pod pod-env))
+        ;; {:keys [port init-ns]} (:repl options)]
+
+        bower-cache (boot/cache-dir! :miraj/bower)
+
+        ;; root-dir (if root-output-dir root-output-dir "miraj")
+        assets-tmp-dir (boot/tmp-dir!)
+        assets-output-dir   (if assets-output-dir (io/file assets-tmp-dir assets-output-dir) assets-tmp-dir)
+        assets-output-path  (.getPath assets-output-dir)
+
+        html-tmp-dir (boot/tmp-dir!)
+        html-output-dir   (if html-output-dir (io/file html-tmp-dir html-output-dir) html-tmp-dir)
+        html-output-path  (.getPath html-output-dir)
+
+        cljs-tmp-dir (boot/tmp-dir!)
+        cljs-output-dir   (if cljs-output-dir (io/file cljs-tmp-dir cljs-output-dir) cljs-tmp-dir)
+        cljs-output-path  (.getPath cljs-output-dir)
+        last-fileset (atom nil)]
+    (boot/empty-dir! bower-cache)
+    (comp
+     ;; (with-pass-thru _
+     ;;   (util/dbug "[dev-backend] options:\n%s\n" (with-out-str (pprint options)))
+     ;;   (util/dbug "[dev-backend] pod env:\n%s\n" (with-out-str (pprint pod-env))))
+     (boot/with-pre-wrap fileset
+       (apply set-refresh-dirs (-> pod/env :directories))
+       ;; (binding [*ns* *ns*]
+       ;;   (let [e (ctnr/refresh)]
+       ;;     (if e (println e)
+       ;;       (clojure.repl/pst)))
+       (let [cfg-map (wc/compile :html-out html-output-path
+                                         :cljs-out cljs-output-path
+                                         :assets-out assets-output-path)
+             cfg-path (str/join "/" [(.getPath bower-cache) "bowdlerize.edn"])]
+         (spit cfg-path cfg-map)
+         (println "CONFIG MAP: " cfg-path)
+
+         (-> fileset
+             ((fn [fs]
+                (if keep
+                  (boot/add-resource fs cljs-tmp-dir)
+                  (boot/add-source fs cljs-tmp-dir))))
+             (boot/add-asset html-tmp-dir)
+             (boot/add-asset assets-tmp-dir)
+             boot/commit!))))))
+      ;; (boot/sync! root-dir tmp-dir)
+      ;; fileset)))
+
+(boot/deftask pkg
+  "pom, jar, install"
+   []
+   (comp (builtin/pom) (builtin/jar) (builtin/install)))
+
+;;OBSOLETE
+(boot/deftask clj2web
+  "extract and store html and cljs from miraj Clojure component definitions"
+
+  [f miraj-file      FILE     str  "input file. If not present, all .clj files will be processed."
+   c component       VAR      str  "component to extract.  Must be namespace qualified."
+   n ns-str          NS       str  "namespace from which to extract commponents"
+   r root-output-dir PATH     str  "relative root of html and cljs output paths. Default: 'miraj'"
+   m html-output-dir PATH     str  "relative root for HTML output. Default '.'"
+   j cljs-output-dir PATH     str  "relative root for cljs output. Default '.'"]
+
+  (println "TASK: boot-miraj/extract")
+  (let [root-dir (if root-output-dir root-output-dir "miraj")
+        tmp-dir (io/file (boot/tmp-dir!) root-dir)
+        tmp-output-path  (.getPath tmp-dir)
+        ;; _ (println "tmp-dir: " tmp-dir)
+        html-output-dir   (if html-output-dir (io/file tmp-dir html-output-dir) tmp-dir)
+        html-output-path  (.getPath html-output-dir)
+        cljs-output-dir   (if cljs-output-dir (io/file tmp-dir cljs-output-dir) tmp-dir)
+        cljs-output-path  (.getPath cljs-output-dir)
+        last-fileset (atom nil)
+        pod          (-> (boot/get-env)
+                         (update-in [:dependencies] into '[[miraj/co-dom "0.1.0-SNAPSHOT"]])
+                         pod/make-pod  ;; use pod-pool?
+                         future)]
+    (boot/with-pre-wrap fileset
+      (pod/with-eval-in @pod
+        (require '[miraj.co-dom :as miraj])
+        (do
+          (if ~ns-str
+            (let [ns-sym (symbol ~ns-str)]
+              (require ns-sym)
+              (let [interns (ns-interns ns-sym)
+                    bld (resolve 'miraj.co-dom/build-component)]
+                (doseq [[isym ivar] interns]
+                  (if (:component (meta ivar))
+                    (miraj.co-dom/build-component [~html-output-path ~cljs-output-path]
+                                                  [isym ivar]))))))
+          (if ~component
+            (do
+              (boot.util/info "processing var: " ~component "\n")
+              (let [widget (symbol ~component)
+                    ns-sym (symbol (namespace widget))
+                    nm (symbol (name widget))]
+                (require ns-sym)
+                (let [ivar (resolve widget)]
+                  (if (:component (meta ivar))
+                    (miraj/build-component [~html-output-path ~cljs-output-path]
+                                           [nm ivar]))))))))
+      (boot/sync! root-dir tmp-dir)
+      fileset)))
+
+;;     (if miraj-file
+;;       (do (println "processing file: " miraj-file)
+;;           (boot/with-pre-wrap fileset
+;;             (let [last-fileset-val @last-fileset
+;;                   all-files        (->> fileset
+;;                                         (boot/fileset-diff last-fileset-val)
+;;                                         boot/input-files
+;;                                         (boot/by-re [#".*"]))
+;;                   files             (->> fileset
+;;                                          (boot/fileset-diff last-fileset-val)
+;;                                          boot/input-files
+;;                                          (boot/by-ext [".clj"]))
+;;                   nss (boot/fileset-namespaces fileset)]
+;;               (reset! last-fileset fileset)
+;;               (when (seq files)
+;;                 (util/info "Building components ... %d changed files.\n" (count files))
+;;                 (doseq [ns-sym nss]
+;;                   (println "Processing ns: " ns-sym)
+;;                   (pod/with-eval-in @pod
+;;                     (require '[miraj.co-dom :as miraj]
+;;                              '~ns-sym)
+;;                     (let [interns (ns-interns '~ns-sym)]
+;;                       (doseq [[isym ivar] interns]
+;;                         #_(println "\t" isym ivar)
+;;                         (if (:component (meta ivar))
+;;                           (miraj/build-component [~html-output-path ~cljs-output-path]
+;;                                                  [isym ivar])))))))
+;;               (boot/sync! root-dir tmp-dir)
+;;               fileset))))
+
+;;     (if (and (not miraj-file) (not ns-str) (not component))
+;;       (do (println "DEFAULT processing")
+;;           (boot/with-pre-wrap fileset
+;;             (let [last-fileset-val @last-fileset
+;;                   all-files        (->> fileset
+;;                                         (boot/fileset-diff last-fileset-val)
+;;                                         boot/input-files
+;;                                         (boot/by-re [#".*"]))
+;;                   files             (->> fileset
+;;                                          (boot/fileset-diff last-fileset-val)
+;;                                          boot/input-files
+;;                                          (boot/by-ext [".clj"]))
+;;                   nss (boot/fileset-namespaces fileset)]
+;;               (reset! last-fileset fileset)
+;;               (when (seq files)
+;;                 (util/info "Building components ... %d changed files.\n" (count files))
+;;                 (doseq [ns-sym nss]
+;;                   (println "Processing ns: " ns-sym)
+;;                   (pod/with-eval-in @pod
+;;                     (require '[miraj.co-dom :as miraj]
+;;                              '~ns-sym)
+;;                     (let [interns (ns-interns '~ns-sym)]
+;;                       (doseq [[isym ivar] interns]
+;;                         #_(println "\t" isym ivar)
+;;                         (if (:component (meta ivar))
+;;                           (miraj/build-component [~html-output-path ~cljs-output-path]
+;;                                                  [isym ivar])))))))
+;;               (boot/sync! root-dir tmp-dir)
+;;               fileset))))))
+;; ;; (-> (boot/new-fileset)
+;;         ;;     (boot/add-resource tmp-dir)
+;;         ;;     boot/commit!)))))
+
+

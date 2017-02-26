@@ -1,0 +1,32 @@
+(ns {{miraj/ns}}
+  "{{{miraj/base.miraj/doc.miraj/short}}}
+
+  {{miraj/base.miraj/doc.miraj/href}}"
+  {{#miraj/refer-clojure}}(:refer-clojure :exclude {{exclude}}){{/miraj/refer-clojure}})
+
+(alter-meta! *ns* (fn [m] (assoc m :miraj/miraj {:miraj/styles true
+                                                 :miraj/assets
+                                                 {:miraj/bower
+                                                  [
+{{#miraj/base.miraj/assets.miraj/bower}}"{{cmd}}" {{/miraj/base.miraj/assets.miraj/bower}}
+                                                   ]
+                                                                :miraj/href "{{miraj/base.miraj/assets.miraj/href}}"}})))
+(def pfx "{{miraj/base.miraj/assets.miraj/href}}")
+
+{{#miraj/styles}}
+;;;;;;;; STYLE: {{miraj/ns}}/{{miraj/fn}} ;;;;;;;;;;;;;;;;
+(defn {{miraj/fn}}
+  "{{{miraj/doc.miraj/short}}}
+
+  {{miraj/base.miraj/doc.miraj/href}}{{miraj/doc.miraj/href}}"
+  [] (println "WARNING: {{miraj/fn}} is not an element function. Do not use it in a webpage or component."))
+(alter-meta! (find-var (symbol (str *ns*) "{{miraj/fn}}"))
+             (fn [old new] (merge old new))
+             {:miraj/miraj {:miraj/style true
+                            :miraj/lib {{miraj/lib}}
+                            :miraj/assets {:miraj/href "{{miraj/base.miraj/assets.miraj/href}}{{miraj/assets.miraj/href}}"
+                                           :miraj/bower "{{miraj/assets.miraj/bower}}"}
+                            :miraj/help "{{miraj/base.miraj/doc.miraj/href}}{{miraj/doc.miraj/href}}"}})
+
+{{/miraj/styles}}
+

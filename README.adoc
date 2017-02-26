@@ -1,0 +1,11 @@
+= boot-miraj
+boot tasklib for miraj development
+
+
+
+= troubleshooting
+
+* You get ClassNotFoundException when you run boot-miraj/compile with
+-w or -n. This may mean that in your boot.build you are passing a
+namespace or fully qualified var without quoting it.
+

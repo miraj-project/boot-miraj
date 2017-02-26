@@ -1,0 +1,49 @@
+(ns {{ns}}
+  {{#refer-clojure}}(:refer-clojure :exclude {{exclude}}){{/refer-clojure}}
+  (:require [miraj.co-dom :refer [element parse-elt-args]]))
+
+(alter-meta! *ns* (fn [m] (assoc m :miraj {:resource-type :polymer
+                                 :resource-pfx "{{base.assets}}"})))
+(def pfx "{{base.assets}}")
+
+{{#components}}
+;;;;;;;; COMPONENT: {{ns}}/{{fn}} ;;;;;;;;;;;;;;;;
+(defn {{fn}}
+  "{{doc.string}}"
+  [& args]
+  (let [wc-meta {:miraj {:co-fn true :html-tag {{html-tag}} ;;  :component '{{lib}}
+                         :assets "{{base.assets}}{{assets}}"
+                         :help "{{base.href}}{{doc.href}}"}
+                 :doc "{{doc.short}}"}]
+    (if (empty? args)
+      (with-meta (element {{html-tag}}) wc-meta)
+      (let [first (first args) rest  (rest  args)
+            [attrs content] (parse-elt-args first rest)]
+        (with-meta (apply element {{html-tag}} attrs content) wc-meta)))))
+(alter-meta! (find-var (symbol (str *ns*) "{{fn}}"))
+             (fn [old new] (merge old new))
+             {:miraj {:co-fn true :html-tag {{html-tag}} ;;  :component '{{lib}}
+                      :assets "{{base.assets}}{{assets}}"
+                      :help "{{base.href}}{{doc.href}}"}
+              :doc "{{doc.short}}"})
+
+{{/components}}
+
+{{#pragmas}}
+(defn {{fn}}
+  [& fn-args]
+  (let [wc-meta {:miraj {:co-fn true :html-tag {{html-tag}} ;;  :component '{{lib}}
+                         :help "{{base.href}}{{doc.href}}"}
+                         :doc "{{doc.short}}"}]
+    (if-let [msg (if (empty? "{{non-conforming}}") nil "{{non-conforming}}")]
+      (throw (Exception. (str "{{attrib}}='{{fn}}': " msg)))
+      (do
+        (if (or (empty? fn-args)
+                (and (string? (first fn-args)) (empty? (first fn-args))))
+          (throw (Exception. (str "HTML pragma directives take one argument: {{fn}}"))))
+        (if (> (count fn-args) 1)
+          (throw (Exception. (str "Content not allowed in HTML meta elements: {{fn}}")))
+          (let [attribs {(keyword "{{attrib}}") "{{fn}}" :content (str (first fn-args))}]
+            (apply element "meta" (list attribs))))))))
+
+{{/pragmas}}

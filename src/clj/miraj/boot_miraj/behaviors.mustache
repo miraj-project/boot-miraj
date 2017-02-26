@@ -1,0 +1,13 @@
+(ns {{ns}})
+
+(def base-href "{{href}}")
+
+{{#behaviors}}
+(defprotocol ^{:resource-type :polymer-behaviors
+               :resource-name "Polymer.{{name}}"
+               :uri (str base-href "/{{href}}")
+               :properties {{properties}}
+               :listeners {{listeners}}}
+  {{fn}})
+
+{{/behaviors}}

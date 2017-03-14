@@ -39,14 +39,14 @@
 (def webstyles-edn     "webstyles.edn")
 (def webextensions-edn "webextensions.edn")
 
-;; this works from edn files. for deflibrary vars, use link-component-lib
-(defn- compile-library
+;; this works from edn files. for deflibrary vars, use link-component-libs
+;; FIXME: move mustache template etc. to core/compiler.clj
+(defn- compile-libraries
   [verbose]
+  (if verbose (util/info "Running fn 'compile-libraries'\n"))
   (fn middleware [next-handler]
     (fn handler [fileset]
-      (if verbose (util/info "Running fn 'compile-library'\n"))
       (let [workspace (boot/tmp-dir!)
-
             webcomponents-edn-files (->> fileset
                                          boot/input-files
                                          (boot/by-re [(re-pattern (str webcomponents-edn "$"))]))
@@ -57,6 +57,39 @@
                                           (str "Only one " webcomponents-edn " file allowed"))))
             webcomponents-edn-map (-> (boot/tmp-file webcomponents-edn-f) slurp read-string)
             ;; _ (println "webcomponents-edn-map: " webcomponents-edn-map)
+
+            target-middleware identity
+            target-handler (target-middleware next-handler)]
+        (doseq [component webcomponents-edn-map]
+          (let [content (stencil/render-file
+                         "miraj/boot_miraj/webcomponents.mustache"
+                         component)
+                component-out-path (str (ns->path (:miraj/ns component)) ".clj")
+                component-out-file (doto (io/file workspace component-out-path) io/make-parents)]
+            (if verbose (util/info "Emitting %s\n" component-out-file))
+            (spit component-out-file content)))
+        (target-handler (-> fileset
+                            (boot/add-resource workspace)
+                            boot/commit!))))))
+
+(defn- compile-extensions
+  [verbose]
+  (if verbose (util/info "Running fn 'compile-extentions'\n"))
+  (fn middleware [next-handler]
+    (fn handler [fileset]
+      (let [workspace (boot/tmp-dir!)
+            webcomponents-edn-files (->> fileset
+                                         boot/input-files
+                                         (boot/by-re [(re-pattern (str webcomponents-edn "$"))]))
+            webcomponents-edn-f (condp = (count webcomponents-edn-files)
+                                  0 (throw (Exception. webcomponents-edn-files " file not found"))
+                                  1 (first webcomponents-edn-files)
+                                  (throw (Exception.
+                                          (str "Only one " webcomponents-edn " file allowed"))))
+            webcomponents-edn-map (-> (boot/tmp-file webcomponents-edn-f) slurp read-string)
+            ;; _ (println "webcomponents-edn-map: " webcomponents-edn-map)
+
+            ;; FIXME: move to compile-extensions
 
             webextensions-edn-files (->> fileset
                                      boot/input-files
@@ -70,7 +103,7 @@
                               nil)
             webextensions-edn-map (if webextensions-edn-f
                                 (-> (boot/tmp-file webextensions-edn-f) slurp read-string) nil)
-            ;; _ (println "webextensions-edn-map: " webextensions-edn-map)
+            _ (println "webextensions-edn-map: " webextensions-edn-map)
 
             target-middleware identity
             target-handler (target-middleware next-handler)]
@@ -81,7 +114,7 @@
                 component-out-path (str (ns->path (:miraj/ns component)) ".clj")
                 component-out-file (doto (io/file workspace component-out-path) io/make-parents)]
             (spit component-out-file content)))
-        (if webextensions-edn-map
+        #_(if webextensions-edn-map
           (doseq [behavior webextensions-edn-map]
             (let [content (stencil/render-file
                            "miraj/boot_miraj/behaviors.mustache"
@@ -103,7 +136,7 @@
                                          boot/input-files
                                          (boot/by-re [(re-pattern (str webstyles-edn "$"))]))
             webstyles-edn-f (condp = (count webstyles-edn-files)
-                                  0 (throw (Exception. webstyles-edn-files " file not found"))
+                                  0 (throw (Exception. (format " file %s not found" webstyles-edn)))
                                   1 (first webstyles-edn-files)
                                   (throw (Exception.
                                           (str "Only one " webstyles-edn " file allowed"))))
@@ -125,7 +158,7 @@
 
 (defn- compile-component-nss
   "Compile webcomponent namespaces."
-  [namespace-set keep pprint verbose]
+  [namespace-set debug keep pprint verbose]
   (fn middleware [next-handler]
     (fn handler [fileset]
       (if verbose (util/info (format "Running fn 'compile-component-nss' for %s\n" namespace-set)))
@@ -135,33 +168,166 @@
             out-pfx "" ;;"assets"
             target-middleware identity
             target-handler (target-middleware next-handler)]
-        (binding [*compile-path* (.getPath cljs-workspace)]
+        (binding [wc/*debug* debug
+                  wc/*verbose* verbose
+                  wc/*keep* keep
+                  wc/*pprint* pprint
+                  *compile-path* (.getPath cljs-workspace)]
           (wc/compile-webcomponents-cljs namespace-set pprint verbose))
-          ;; (wc/compile-webcomponent-nss :cljs namespace-set pprint verbose))
-        (binding [*compile-path* (.getPath (doto (io/file html-workspace out-pfx) io/make-parents))]
-          ;;(.getPath html-workspace)]
-          (wc/compile-webcomponent-nss :html namespace-set pprint verbose))
+        (binding [wc/*debug* debug
+                  wc/*verbose* verbose
+                  wc/*keep* keep
+                  wc/*pprint* pprint
+                  *compile-path* (.getPath (doto (io/file html-workspace out-pfx) io/make-parents))]
+          (wc/compile-webcomponents-html namespace-set pprint verbose))
         (target-handler (-> fileset
                             (cljs-handler cljs-workspace)
-                            (boot/add-asset html-workspace)
+                            (boot/add-resource html-workspace)
+                            boot/commit!))))))
+
+(defn- link-component-libs
+  "Link webcomponent namespaces."
+  [namespace-set keep debug pprint verbose]
+  (fn middleware [next-handler]
+    (fn handler [fileset]
+      (if verbose (util/info (format "Running fn 'link-component-libs' for %s\n" namespace-set)))
+      (let [workspace (boot/tmp-dir!)
+            ;; html-workspace (boot/tmp-dir!)
+            ;; cljs-workspace (boot/tmp-dir!)
+            ;; cljs-handler (if keep boot/add-resource boot/add-source)
+            out-pfx "" ;;"assets"
+            target-middleware identity
+            target-handler (target-middleware next-handler)]
+        (binding [wc/*debug* debug
+                  wc/*verbose* verbose
+                  wc/*keep* keep
+                  wc/*pprint* pprint
+                  *compile-path* (.getPath workspace)]
+          (wc/link-libraries namespace-set))
+          ;; (wc/link-component-libs namespace-set))
+        (target-handler (-> fileset
+                            (boot/add-asset workspace)
+                            boot/commit!))))))
+
+(defn- link-libraries
+  "Link component libraries (deflibrary)."
+  [namespace-set keep debug pprint verbose]
+  (fn middleware [next-handler]
+    (fn handler [fileset]
+      (if verbose (util/info (format "Running fn 'link-libraries' for %s\n" namespace-set)))
+      (let [workspace (boot/tmp-dir!)
+            ;; html-workspace (boot/tmp-dir!)
+            ;; cljs-workspace (boot/tmp-dir!)
+            ;; cljs-handler (if keep boot/add-resource boot/add-source)
+            out-pfx "" ;;"assets"
+            target-middleware identity
+            target-handler (target-middleware next-handler)]
+        (binding [wc/*debug* debug
+                  wc/*verbose* verbose
+                  wc/*keep* keep
+                  wc/*pprint* pprint
+                  *compile-path* (.getPath workspace)]
+          (wc/link-libraries namespace-set))
+        (target-handler (-> fileset
+                            (boot/add-resource workspace)
                             boot/commit!))))))
 
 (defn- compile-page-nss
   "Compile page namespaces"
-  [namespace-set pprint verbose]
+  [namespace-set debug pprint verbose]
   (fn middleware [next-handler]
     (fn handler [fileset]
-      ;; (if verbose (util/info (format "Running fn 'compile-page-nss' for %s\n" namespace-set)))
+      (if verbose (util/info (format "Running fn 'compile-page-nss' for %s\n" namespace-set)))
       (let [workspace (boot/tmp-dir!)
             target-middleware identity
             target-handler (target-middleware next-handler)]
-        (binding [*compile-path* (.getPath workspace)]
+        (if debug (clojure.core/require '[miraj.co-dom]
+                                        '[miraj.core]
+                                        '[miraj.compiler]
+                                        :reload))
+        (binding [wc/*debug* debug
+                  wc/*verbose* verbose
+                  wc/*keep* false ;; keep
+                  wc/*pprint* pprint
+                  *compile-path* (.getPath workspace)]
           (wc/compile-page-nss namespace-set pprint verbose))
+        (target-handler (-> fileset (boot/add-resource workspace) boot/commit!))))))
+
+(defn- link-pages
+  "link page namespaces"
+  [namespace-set debug pprint verbose]
+  (fn middleware [next-handler]
+    (fn handler [fileset]
+      (if verbose (util/info (format "Running fn 'link-pages' for %s\n" namespace-set)))
+      (let [workspace (boot/tmp-dir!)
+            target-middleware identity
+            target-handler (target-middleware next-handler)]
+        (binding [wc/*debug* debug
+                  wc/*verbose* verbose
+                  wc/*keep* false ;keep
+                  wc/*pprint* pprint
+                  *compile-path* (.getPath workspace)]
+          (wc/link-pages namespace-set verbose))
+        (target-handler (-> fileset
+                            (boot/add-resource workspace)
+                            boot/commit!))))))
+
+(defn- compile-test-pages
+  "Generate test pages for component libs"
+  [namespace-set keep pprint verbose]
+  (fn middleware [next-handler]
+    (fn handler [fileset]
+      (if verbose (util/info (format "Running fn 'compile-test-pages' for %s\n" namespace-set)))
+      (let [workspace (boot/tmp-dir!)
+            target-middleware identity
+            target-handler (target-middleware next-handler)]
+        (binding [wc/*debug* true
+                  wc/*verbose* verbose
+                  wc/*keep* keep
+                  wc/*pprint* pprint
+                  *compile-path* (.getPath workspace)]
+          (wc/create-test-pages namespace-set))
+        (target-handler (-> fileset (boot/add-resource workspace) boot/commit!))))))
+
+(defn- link-lib-testpage
+  "Generate and link test page for component lib"
+  [namespace-set debug keep pprint verbose]
+  (fn middleware [next-handler]
+    (fn handler [fileset]
+      (if verbose (util/info (format "Running fn 'link-test-pages' for %s\n" namespace-set)))
+      (let [workspace (boot/tmp-dir!)
+            target-middleware identity
+            target-handler (target-middleware next-handler)]
+        (require '[miraj.compiler] :reload)
+        (binding [wc/*debug* debug
+                  wc/*verbose* verbose
+                  wc/*keep* keep
+                  wc/*pprint* pprint
+                  *compile-path* (.getPath workspace)]
+          (wc/create-lib-test-pages namespace-set))
+        (target-handler (-> fileset (boot/add-resource workspace) boot/commit!))))))
+
+(defn- link-test-pages
+  "Generate and link test page for component lib"
+  [namespace-set debug keep pprint verbose]
+  (fn middleware [next-handler]
+    (fn handler [fileset]
+      (if verbose (util/info (format "Running fn 'link-test-pages' for %s\n" namespace-set)))
+      (let [workspace (boot/tmp-dir!)
+            target-middleware identity
+            target-handler (target-middleware next-handler)]
+        (require '[miraj.compiler] :reload)
+        (binding [wc/*debug* debug
+                  wc/*verbose* verbose
+                  wc/*keep* keep
+                  wc/*pprint* pprint
+                  *compile-path* (.getPath workspace)]
+          (wc/link-test-pages namespace-set))
         (target-handler (-> fileset (boot/add-resource workspace) boot/commit!))))))
 
 (defn- compile-page-vars
   "Compile page vars."
-  [page-var-set pprint verbose]
+  [page-var-set debug pprint verbose]
   (fn middleware [next-handler]
     (fn handler [fileset]
       ;; (if verbose (util/info (format "Running fn 'compile-page-vars' for %s\n" page-var-set)))
@@ -170,9 +336,32 @@
             target-handler (target-middleware next-handler)]
         (doseq [[idx pv] (map-indexed vector page-var-set)]
           (let [ns (symbol (->  pv namespace))]
-            (binding [*compile-path* (.getPath workspace)]
-                (require ns)
-                (wc/compile-page-var (find-var pv) pprint verbose))))
+            (binding [wc/*debug* debug
+                      wc/*verbose* verbose
+                      wc/*keep* false
+                      wc/*pprint* pprint
+                      *compile-path* (.getPath workspace)]
+              (require ns)
+              (wc/compile-page-var (find-var pv) pprint verbose))))
+        (target-handler (-> fileset (boot/add-resource workspace) boot/commit!))))))
+
+#_(boot/deftask assemble
+  "Processes deflibrary vars to link webcomponent libraries."
+  [n namespace NS sym "namespace for library (NOT the implementation namespace of the components)."
+   p pprint     bool        "Pretty-print generated HTML."
+   v verbose bool "verbose"]
+  (fn middleware [next-handler]
+    (fn handler [fileset]
+      (if verbose (util/info (format "Running task 'assemble' for namespace %s\n" namespace)))
+      (let [all-nses (->> fileset boot/fileset-namespaces)]
+        (doseq [app-ns all-nses]
+          (util/dbug "Requiring ns: " app-ns)
+          (require app-ns)))
+      (let [workspace (boot/tmp-dir!)
+            target-middleware identity
+            target-handler (target-middleware next-handler)]
+        (binding [*compile-path* (.getPath workspace)]
+          (wc/assemble-component-lib-for-ns namespace pprint verbose))
         (target-handler (-> fileset (boot/add-resource workspace) boot/commit!))))))
 
 (boot/deftask assetize
@@ -208,89 +397,156 @@
   everything in all namespaces. Use -m to compile one miraj var, -n to
   compile all miraj vars in a namespace."
   [;;a all        bool        "Compile all page vars in all miraj namespaces to HTML."
-   c component NS  #{sym}   "Compile webcomponent namespace."
+   c components bool        "Compile webcomponents."
    d debug      bool        "Debug mode - pretty-print, keep, etc."
    k keep       bool        "Keep transient work products (e.g. cljs files)."
-   l library    bool        "Generate Clojure libraries from webcomponents.edn files."
-   m miraj-var    SYM  #{sym} "Compile miraj var."
+   l libraries  bool        "Generate Clojure libraries from webcomponents.edn files."
+   m miraj-var  SYM  #{sym} "Compile miraj var."
    n namespace  NS  #{sym}  "Compile all miraj vars in namespace NS."
-   p pprint     bool        "Pretty-print generated HTML."
-   s style      bool        "Compile webstyles.edn files."
+   p pages      bool        "Compile defpage vars"
+   s styles     bool        "Compile webstyles.edn files."
+   t test       bool        "Generate test page."
    v verbose    bool        "verbose"]
-  (let [all (and (empty? namespace) (empty? miraj-var))
+  ;;(let [all (and (empty? namespace) (empty? miraj-var))
+  ;; default: do all components and pages
+  (let [do-components (if components true (if (and (not pages) (not libraries) (not styles))
+                                            true false))
+        do-pages (if pages true (if (and (not components) (not libraries) (not styles))
+                                  true false))
+        do-libraries (if libraries true (if (and (not components) (not pages) (not styles))
+                                          true false))
+        do-styles (if styles true (if (and (not components) (not pages) (not styles))
+                                    true false))
         keep (or keep debug)
+        pprint debug
         verbose (or verbose debug)]
     (fn middleware [next-handler]
       (fn handler [fileset]
         (if verbose (util/info "Running task 'compile'\n"))
         (let [target-middleware (comp
-                                 (if all
-                                   (comp
-                                    (compile-page-nss (->> fileset boot/fileset-namespaces)
-                                                      pprint verbose)
-                                    (compile-component-nss (->> fileset boot/fileset-namespaces)
-                                                           keep pprint verbose))
+                                 (if keep
+                                   (builtin/sift :to-resource #{(re-pattern ".*cljs")})
                                    identity)
 
-                                 (if component
-                                   (compile-component-nss component keep pprint verbose)
+                                 (if do-components
+                                   (if namespace
+                                     (compile-component-nss namespace debug keep pprint verbose)
+                                     (compile-component-nss (->> fileset boot/fileset-namespaces)
+                                                            debug keep pprint verbose))
                                    identity)
 
-                                 (if library (compile-library verbose) identity)
-
-                                 (if (not (empty? namespace))
-                                   (compile-page-nss namespace pprint verbose)
+                                 (if do-pages
+                                   (if namespace
+                                     (compile-page-nss namespace debug #_keep pprint verbose)
+                                     (compile-page-nss (->> fileset boot/fileset-namespaces)
+                                                       debug #_keep pprint verbose))
                                    identity)
 
-                                 (if style (compile-styles verbose) identity)
+                                 (if test (compile-test-pages (->> fileset boot/fileset-namespaces)
+                                                              keep pprint verbose)
+                                     identity)
+
+                                 (if do-libraries (compile-libraries verbose) identity)
+
+                                 ;; (if (not (empty? namespace))
+                                 ;;   (compile-page-nss namespace pprint verbose)
+                                 ;;   identity)
+
+                                 (if styles (compile-styles verbose) identity)
 
                                  (if (not (empty? miraj-var))
-                                   (compile-page-vars miraj-var pprint verbose)
+                                   (compile-page-vars miraj-var debug pprint verbose)
                                    identity)
 
-                                 (if (or all component library namespace style miraj-var)
+                                 (if (or #_all do-components libraries do-pages styles miraj-var)
                                    identity
                                    (do
-                                     (util/warn (str "WARNNING: nothing compiled. Please specify --components, --library, --namespace, --style, or --page.\n"))
+                                     (util/warn (str "WARNNING: nothing compiled. Please specify --components, --libraries, --pages, or --styles.\n"))
                                      identity)))
               target-handler (target-middleware next-handler)]
           (target-handler fileset))))))
 
-;; OBSOLETE - use link instead
-(boot/deftask assemble
-  "Processes deflibrary vars to link webcomponent libraries."
-  [n namespace NS sym "namespace for library (NOT the implementation namespace of the components)."
-   p pprint     bool        "Pretty-print generated HTML."
-   v verbose bool "verbose"]
-  (fn middleware [next-handler]
-    (fn handler [fileset]
-      (if verbose (util/info (format "Running task 'assemble' for namespace %s\n" namespace)))
-      (let [all-nses (->> fileset boot/fileset-namespaces)]
-        (doseq [app-ns all-nses]
-          (util/dbug "Requiring ns: " app-ns)
-          (require app-ns)))
-      (let [workspace (boot/tmp-dir!)
-            target-middleware identity
-            target-handler (target-middleware next-handler)]
-        (binding [*compile-path* (.getPath workspace)]
-          (wc/assemble-component-lib-for-ns namespace pprint verbose))
-        (target-handler (-> fileset (boot/add-resource workspace) boot/commit!))))))
+(boot/deftask demo-page
+  "Generate a master demo page for a component library."
+  [d debug    bool       "debug"
+   p pprint   bool       "pprint"
+   v verbose  bool       "verbose"]
+  (if verbose (util/info (format "Running task 'demo-page'\n")))
+  (let [pprint (or debug false)
+        verbose (or debug verbose)]
+    (fn middleware [next-handler]
+      (fn handler [fileset]
+        (let [workspace   (boot/tmp-dir!)
+              nss (->> fileset boot/fileset-namespaces)
+              _ (util/info (format "NSS %s\n" (seq nss)))
+              target-middleware identity
+              target-handler (target-middleware next-handler)]
+          (binding [wc/*debug* debug
+                    wc/*verbose* verbose
+                    wc/*keep* false
+                    wc/*pprint* pprint
+                    *compile-path* (.getPath workspace)]
+            (wc/create-master-demo-page nss))
+          (target-handler (-> fileset
+                              (boot/add-resource workspace)
+                              boot/commit!)))))))
 
 (boot/deftask link
   "Processes deflibrary vars to link webcomponent libraries."
-  [;;p pprint     bool        "Pretty-print generated HTML."
-   v verbose bool "verbose"]
-  (fn middleware [next-handler]
-    (fn handler [fileset]
-      (if verbose (util/info (format "Running task 'link'\n")))
-      (let [workspace (boot/tmp-dir!)
-            nss-syms (->> fileset boot/fileset-namespaces)
-            target-middleware identity
-            target-handler (target-middleware next-handler)]
-        (binding [*compile-path* (.getPath workspace)]
-          (wc/link-component-libs nss-syms verbose)
-          (wc/link-pages nss-syms verbose))
-        (target-handler (-> fileset (boot/add-resource workspace) boot/commit!))))))
+  [;;p pprint     bool     "Pretty-print generated HTML."
+   c components bool       "Link components"
+   d debug      bool       "Debug mode - keep, pprint, verbose, etc."
+   l libraries  bool       "Link component libraries."
+   n namespace  NS  #{sym} "Link all miraj vars in namespace NS."
+   p pages      bool       "Link pages"
+   t test       bool       "Generate and link test webpage"
+   v verbose    bool       "verbose"]
+  (let [pprint (or debug false)
+        verbose (or debug verbose)]
+    (fn middleware [next-handler]
+      (fn handler [fileset]
+        (if verbose (util/info (format "Running task 'link'\n")))
+        (let [do-components (if components true (if (and (not libraries) (not pages))
+                                                         true false))
+              do-libraries (if libraries true (if (and (not components) (not pages))
+                                                true false))
+              do-pages (if pages true (if (and (not components) (not libraries))
+                                        true false))
+              workspace (boot/tmp-dir!)
+              target-middleware (comp
+                                 (if do-components
+                                   (if namespace
+                                     (link-component-libs namespace keep debug pprint verbose)
+                                     (link-component-libs (->> fileset boot/fileset-namespaces)
+                                                          keep debug pprint verbose))
+                                   identity)
+
+                                 (if do-libraries
+                                   (if namespace
+                                     (link-libraries namespace keep debug pprint verbose)
+                                     (link-libraries (->> fileset boot/fileset-namespaces)
+                                                     keep debug pprint verbose))
+                                   identity)
+
+                                 (if do-pages
+                                   (if namespace
+                                     (link-pages namespace #_keep pprint test verbose)
+                                     (link-pages (->> fileset boot/fileset-namespaces)
+                                                 #_keep pprint test verbose))
+                                   identity)
+
+                                 (if test
+                                   (if do-libraries
+                                     (link-lib-testpage (->> fileset boot/fileset-namespaces)
+                                                        debug keep pprint verbose)
+                                     (if do-pages
+                                       (link-test-pages (->> fileset boot/fileset-namespaces)
+                                                        debug keep pprint verbose)
+                                       identity))
+                                   identity))
+
+              target-handler (target-middleware next-handler)]
+          (target-handler fileset))))))
 
 (boot/deftask config
   "config component resources for web app"

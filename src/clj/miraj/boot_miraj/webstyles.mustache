@@ -5,6 +5,7 @@
   {{#miraj/refer-clojure}}(:refer-clojure :exclude {{exclude}}){{/miraj/refer-clojure}})
 
 (alter-meta! *ns* (fn [m] (assoc m :miraj/miraj {:miraj/styles true
+                                                 :miraj/nss '{{miraj/nss}}
                                                  :miraj/assets
                                                  {:miraj/bower
                                                   [
@@ -14,13 +15,15 @@
 (def pfx "{{miraj/base.miraj/assets.miraj/href}}")
 
 {{#miraj/styles}}
-;;;;;;;; STYLE: {{miraj/ns}}/{{miraj/fn}} ;;;;;;;;;;;;;;;;
-(defn {{miraj/fn}}
+;;;;;;;; STYLE: {{miraj/ns}}/{{miraj/def}} ;;;;;;;;;;;;;;;;
+(def {{miraj/def}}
   "{{{miraj/doc.miraj/short}}}
 
   {{miraj/base.miraj/doc.miraj/href}}{{miraj/doc.miraj/href}}"
-  [] (println "WARNING: {{miraj/fn}} is not an element function. Do not use it in a webpage or component."))
-(alter-meta! (find-var (symbol (str *ns*) "{{miraj/fn}}"))
+  {:miraj/href "{{miraj/base.miraj/assets.miraj/href}}{{miraj/assets.miraj/href}}"{{#miraj/module}}
+   :miraj/module '{{miraj/module}}{{/miraj/module}}})
+
+(alter-meta! (find-var (symbol (str *ns*) "{{miraj/def}}"))
              (fn [old new] (merge old new))
              {:miraj/miraj {:miraj/style true
                             :miraj/lib {{miraj/lib}}

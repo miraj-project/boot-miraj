@@ -6,10 +6,15 @@
 (set-env!
  :resource-paths #{"src/clj"}
  ;;:source-paths #{"src/clj"}
+
+ ;; needed for developing core and co-com?
+ ;; :checkouts '[[miraj/core "0.1.0-SNAPSHOT"]
+ ;;             [miraj/co-dom "0.1.0-SNAPSHOT"]]
+
  :dependencies   '[[org.clojure/clojure RELEASE :scope "provided"]
                    [org.clojure/tools.namespace "0.2.11"]
-                   [miraj/core "0.1.0-SNAPSHOT"]
-                   [miraj/co-dom "0.1.0-SNAPSHOT" :scope "provided"]
+                   ;; [miraj/core "0.1.0-SNAPSHOT"]
+                   ;; [miraj/co-dom "0.1.0-SNAPSHOT" :scope "provided"]
                    [stencil "0.5.0"]
 
                    [boot/core "RELEASE" :scope "provided"]
@@ -22,7 +27,7 @@
                    #_[org.webjars/bootstrap "3.3.6" :scope "test"]
                    ])
 
-(require '[miraj.boot-miraj :refer :all]
+(require ;; '[miraj.boot-miraj :refer :all]
          '[adzerk.boot-test :refer [test]])
 
 (task-options!

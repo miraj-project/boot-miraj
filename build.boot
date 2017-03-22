@@ -13,8 +13,8 @@
 
  :dependencies   '[[org.clojure/clojure RELEASE :scope "provided"]
                    [org.clojure/tools.namespace "0.2.11"]
-                   ;; [miraj/core "0.1.0-SNAPSHOT"]
-                   ;; [miraj/co-dom "0.1.0-SNAPSHOT" :scope "provided"]
+                   [miraj/core "0.1.0-SNAPSHOT"]
+                   [miraj/co-dom "0.1.0-SNAPSHOT" :scope "provided"]
                    [stencil "0.5.0"]
 
                    [boot/core "RELEASE" :scope "provided"]
@@ -72,7 +72,7 @@
   (comp
    (test :namespaces #{'less4clj.core-test 'less4clj.webjars-test})))
 
-(deftask monitor
+(deftask dev
   "watch etc."
   []
   (comp (watch)

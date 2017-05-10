@@ -10,9 +10,6 @@
 ;;                                                    ]
 ;;                                                    :miraj/base "{{miraj/base.miraj/assets.miraj/href}}"}})))
 
-(println "loading {{miraj/ns}}")
-
-
 {{#miraj/exports}}
 ;;;;;;;; COMPONENT: {{miraj/ns}}/{{miraj/defn}} ;;;;;;;;;;;;;;;;
 (defn {{miraj/defn}}
@@ -56,5 +53,3 @@
 {{#miraj/html}}
 (load "html_spec")
 {{/miraj/html}}
-
-(println "loaded {{miraj/ns}}")

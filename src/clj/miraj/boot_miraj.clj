@@ -5,8 +5,8 @@
             [clojure.set                  :as set]
             [clojure.string               :as str]
             [clojure.tools.namespace.repl :as ctnr :refer [refresh set-refresh-dirs]]
+            [miraj.co-dom                 :refer [*pprint*]]
             [miraj.core                   :as miraj]
-            ;; [miraj.compiler               :as wc]
             [stencil.core                 :as stencil]
             [boot.pod                     :as pod]
             [boot.core                    :as boot]
@@ -171,13 +171,13 @@
         (binding [miraj/*debug* debug
                   miraj/*verbose* verbose
                   miraj/*keep* keep
-                  miraj/*pprint* pprint
+                  miraj.co-dom/*pprint* pprint
                   *compile-path* (.getPath cljs-workspace)]
           (miraj/compile-webcomponents-cljs namespace-set pprint verbose))
         (binding [miraj/*debug* debug
                   miraj/*verbose* verbose
                   miraj/*keep* keep
-                  miraj/*pprint* pprint
+                  miraj.co-dom/*pprint* pprint
                   *compile-path* (.getPath (doto (io/file html-workspace out-pfx) io/make-parents))]
           (miraj/compile-webcomponents-html namespace-set pprint verbose))
         (target-handler (-> fileset
@@ -201,7 +201,7 @@
         (binding [miraj/*debug* debug
                   miraj/*verbose* verbose
                   miraj/*keep* keep
-                  miraj/*pprint* pprint
+                  miraj.co-dom/*pprint* pprint
                   *compile-path* (.getPath workspace)]
           (miraj/link-libraries namespace-set))
           ;; (miraj/link-component-libs namespace-set))
@@ -225,50 +225,214 @@
         (binding [miraj/*debug* debug
                   miraj/*verbose* verbose
                   miraj/*keep* keep
-                  miraj/*pprint* pprint
+                  miraj.co-dom/*pprint* pprint
                   *compile-path* (.getPath workspace)]
           (miraj/link-libraries namespace-set))
         (target-handler (-> fileset
                             (boot/add-resource workspace)
                             boot/commit!))))))
 
-(defn- compile-page-nss
-  "Compile page namespaces"
-  [namespace-set debug pprint verbose]
+(defn- compile-page-vars
+  "Compile page vars."
+  [page-var-set opts]
+  (if (:debug opts) (util/info (format "Running fn 'compile-page-vars %s'\n" page-var-set)))
+  (if (:debug opts) (util/info (format "opts: %s\n" opts)))
   (fn middleware [next-handler]
     (fn handler [fileset]
-      (if verbose (util/info (format "Running fn 'compile-page-nss' for %s\n" namespace-set)))
-      (let [workspace (boot/tmp-dir!)
+      (let [workspace   (boot/tmp-dir!)
             target-middleware identity
             target-handler (target-middleware next-handler)]
-        (if debug (clojure.core/require '[miraj.co-dom]
-                                        '[miraj.core]
-                                        '[miraj.compiler]
-                                        :reload))
-        (binding [miraj/*debug* debug
-                  miraj/*verbose* verbose
-                  miraj/*keep* false ;; keep
-                  miraj/*pprint* pprint
-                  *compile-path* (.getPath workspace)]
-          (miraj/compile-page-nss namespace-set pprint verbose))
+        (doseq [[idx pv] (map-indexed vector page-var-set)]
+          (let [ns (symbol (->  pv namespace))]
+            (binding [miraj/*debug* (:debug opts)
+                      miraj/*verbose* (or (:verbose opts) (:debug opts))
+                      miraj/*keep* (:keep opts)
+                      miraj.co-dom/*pprint* (or (:debug opts) (:pprint opts))
+                      *compile-path* (.getPath workspace)]
+              (require ns)
+              (miraj/compile-page-ref (find-var pv)))))
         (target-handler (-> fileset (boot/add-resource workspace) boot/commit!))))))
+
+;; (defn- compile-page
+;;   "Compile page."
+;;   [page-ref opts]
+;;   (if (:debug opts) (util/info (format "Running fn 'compile-page %s'\n" page-ref)))
+;;   (if (:debug opts) (util/info (format "opts: %s\n" opts)))
+;;   (fn middleware [next-handler]
+;;     (fn handler [fileset]
+;;       (let [vopts (mapcat identity (into [] opts))
+;;             _ (util/info (format "VOPTS %s\n" (seq vopts)))
+;;             workspace   (boot/tmp-dir!)
+;;             target-middleware identity
+;;             target-handler (target-middleware next-handler)]
+;;         (let [ns (if-let [nsp (namespace page-ref)]
+;;                    (symbol nsp)
+;;                    ;; must be an ns symbol already
+;;                    page-ref)]
+;;             (binding [miraj/*debug* (:debug opts)
+;;                       miraj/*verbose* (or (:verbose opts) (:debug opts))
+;;                       miraj/*keep* (:keep opts)
+;;                       miraj.co-dom/*pprint* (or (:debug opts) (:pprint opts))
+;;                       *compile-path* (.getPath workspace)]
+;;               (require ns :reload)
+;;               (miraj/mcc vopts))
+;;             (target-handler
+;;              (-> fileset (boot/add-resource workspace) boot/commit!)))))))
+
+(defn- compile-pages
+  "Compile defpages"
+  ;; FIXME: to support watch loop, only compile changed namespaces
+  [opts] ;; debug pprint verbose]
+  (let [namespace-set (:pages opts)]
+    (fn middleware [next-handler]
+      (fn handler [fileset]
+        (if (or (:debug opts) (:verbose opts))
+          (util/info (format "Running fn 'compile-pages' for %s\n" opts)))
+        (if (or (:debug opts) (:verbose opts))
+          (util/info (format "opts %s\n" opts)))
+
+        ;; filter for pagespaces
+        ;; (let [page-nss (filter (fn [maybe-pns]
+        ;;                          (util/info "maybe pagespace %s\n" maybe-pns)
+        ;;                          ;; (clojure.core/remove-ns maybe-pns)
+        ;;                          ;; (clojure.core/require maybe-pns :reload)
+        ;;                          (let [maybe-page-ns (find-ns maybe-pns)
+        ;;                                _ (util/info " maybe pagespace ns %s\n" maybe-page-ns)
+        ;;                                _ (util/info " pagespace meta %s\n"
+        ;;                                             (-> maybe-page-ns clojure.core/meta))
+        ;;                                ps (-> maybe-page-ns clojure.core/meta
+        ;;                                       :miraj/miraj :miraj/pagespace)]
+        ;;                            (util/info "pagespace? %s\n" ps)
+        ;;                            ps))
+        ;;                            namespace-set)]
+        ;;   (util/info (format "Page-Nss: %s\n" (seq page-nss)))
+        (let [workspace (boot/tmp-dir!)
+              target-middleware identity
+              target-handler (target-middleware next-handler)]
+          ;; (if (:debug opts) (clojure.core/require '[miraj.co-dom]
+          ;;                                         '[miraj.core]
+          ;;                                         :reload))
+          (binding [miraj/*debug* (:debug opts)
+                    miraj/*verbose* (or (:debug opts) (:verbose opts))
+                    miraj/*keep* (:keep opts)
+                    miraj.co-dom/*pprint* (or (:debug opts) (:pprint opts))
+                    *compile-path* (.getPath workspace)]
+            ;; (miraj/compile-pages namespace-set #_page-nss opts))
+            ;; (require ns :reload)
+            (miraj/mcc opts))
+          (target-handler (-> fileset (boot/add-resource workspace) boot/commit!)))))))
+
+(defn- compile-pagespaces
+  "Compile pagespaces"
+  [opts] ;; debug pprint verbose]
+  (let [namespace-set (:pages opts)]
+    (fn middleware [next-handler]
+      (fn handler [fileset]
+        (if (or (:debug opts) (:verbose opts))
+          (util/info (format "Running fn 'compile-pagespaces' for %s\n" opts)))
+        (if (or (:debug opts) (:verbose opts))
+          (util/info (format "opts %s\n" opts)))
+
+        ;; filter for pagespaces
+        ;; (let [page-nss (filter (fn [maybe-pns]
+        ;;                          (util/info "maybe pagespace %s\n" maybe-pns)
+        ;;                          ;; (clojure.core/remove-ns maybe-pns)
+        ;;                          ;; (clojure.core/require maybe-pns :reload)
+        ;;                          (let [maybe-page-ns (find-ns maybe-pns)
+        ;;                                _ (util/info " maybe pagespace ns %s\n" maybe-page-ns)
+        ;;                                _ (util/info " pagespace meta %s\n"
+        ;;                                             (-> maybe-page-ns clojure.core/meta))
+        ;;                                ps (-> maybe-page-ns clojure.core/meta
+        ;;                                       :miraj/miraj :miraj/pagespace)]
+        ;;                            (util/info "pagespace? %s\n" ps)
+        ;;                            ps))
+        ;;                            namespace-set)]
+        ;;   (util/info (format "Page-Nss: %s\n" (seq page-nss)))
+        (let [workspace (boot/tmp-dir!)
+              target-middleware identity
+              target-handler (target-middleware next-handler)]
+          ;; (if (:debug opts) (clojure.core/require '[miraj.co-dom]
+          ;;                                         '[miraj.core]
+          ;;                                         :reload))
+          (binding [miraj/*debug* (:debug opts)
+                    miraj/*verbose* (or (:debug opts) (:verbose opts))
+                    miraj/*keep* (:keep opts)
+                    miraj.co-dom/*pprint* (or (:debug opts) (:pprint opts))
+                    *compile-path* (.getPath workspace)]
+            ;; (miraj/compile-pages namespace-set #_page-nss opts))
+            ;; (require ns :reload)
+            (miraj/mcc opts))
+          (target-handler (-> fileset (boot/add-resource workspace) boot/commit!)))))))
+
+(defn- assetize
+  "Install assets from miraj dependencies."
+  [dep]
+  (util/info (format "Running fn 'assetize' for %s\n" dep))
+  (fn middleware [next-handler]
+    (fn handler [fileset]
+      (let [workspace (boot/tmp-dir!)
+            target-middleware identity
+            target-handler (target-middleware next-handler)
+            env (boot/get-env)
+            ;; pod          (-> env
+            ;;                  pod/make-pod  ;; use pod-pool?
+            ;;                  future)
+            deps  (seq (:dependencies env))
+            _ (util/info "DEPS: " deps)
+            deps (filter #(= "miraj" (:scope (pod/coord->map %))) deps)
+            _ (set (for [d deps]
+                     (util/info "MIRAJ DEP: " d)))
+            webjars (set (for [d deps] (pod/resolve-dependency-jar env d)))
+            ]
+        (util/info "webjars: " webjars)
+        (let [out-dir (io/file workspace)]
+          (doseq [webjar webjars]
+            (pod/unpack-jar webjar out-dir)))
+        (-> fileset (boot/add-asset workspace :exclude [#"META-INF.*"]) boot/commit!)))))
 
 (defn- link-pages
   "link page namespaces"
-  [namespace-set debug pprint verbose]
+  [namespace-set opts] ;; debug pprint verbose]
   (fn middleware [next-handler]
     (fn handler [fileset]
-      (if verbose (util/info (format "Running fn 'link-pages' for %s\n" namespace-set)))
+      (if (:verbose opts) (util/info (format "Running fn 'link-pages' for %s\n" namespace-set)))
       (let [workspace (boot/tmp-dir!)
+            assets-workspace (boot/tmp-dir!)
             target-middleware identity
-            target-handler (target-middleware next-handler)]
-        (binding [miraj/*debug* debug
-                  miraj/*verbose* verbose
-                  miraj/*keep* false ;keep
-                  miraj/*pprint* pprint
+            target-handler (target-middleware next-handler)
+
+            ;; FIXME: only do this once, only if polymer assets actually used
+            newfs (if (= (:assets opts) :polymer)
+                    (do (util/info (format "Copying assets\n"))
+                        (let [env (boot/get-env)
+                              ;; pod          (-> env
+                              ;;                  pod/make-pod  ;; use pod-pool?
+                              ;;                  future)
+                              deps  (seq (:dependencies env))
+                              ;; _ (util/info "DEPS: %s\n" deps)
+                              deps (filter #(= 'miraj.polymer/assets
+                                               (first %))
+                                           deps)
+                              _ (set (for [d deps]
+                                       (util/info "MIRAJ DEP: %s\n" d)))
+                              assets (set (for [d deps] (pod/resolve-dependency-jar env d)))
+                              ]
+                          ;; (util/info "assets: %s\n" assets)
+                          (let [out-dir (io/file workspace)]
+                            (doseq [asset assets]
+                              (util/info "UNPACKING asset: %s\n" asset)
+                              (pod/unpack-jar asset out-dir)))
+                          (-> fileset (boot/add-asset workspace
+                                                      :exclude [#"META-INF.*"])
+                              boot/commit!)))
+                    fileset)]
+        (binding [miraj/*debug* (:debug opts)
+                  miraj/*verbose* (or (:debug opts) (:verbose opts))
+                  miraj/*keep* (:keep opts)
+                  miraj.co-dom/*pprint* (or (:debug opts) (:pprint opts))
                   *compile-path* (.getPath workspace)]
-          (miraj/link-pages namespace-set verbose))
-        (target-handler (-> fileset
+          (miraj/link-pages namespace-set opts))
+        (target-handler (-> newfs
                             (boot/add-resource workspace)
                             boot/commit!))))))
 
@@ -284,7 +448,7 @@
         (binding [miraj/*debug* true
                   miraj/*verbose* verbose
                   miraj/*keep* keep
-                  miraj/*pprint* pprint
+                  miraj.co-dom/*pprint* pprint
                   *compile-path* (.getPath workspace)]
           (miraj/create-test-pages namespace-set))
         (target-handler (-> fileset (boot/add-resource workspace) boot/commit!))))))
@@ -302,7 +466,7 @@
         (binding [miraj/*debug* debug
                   miraj/*verbose* verbose
                   miraj/*keep* keep
-                  miraj/*pprint* pprint
+                  miraj.co-dom/*pprint* pprint
                   *compile-path* (.getPath workspace)]
           (miraj/create-lib-test-pages namespace-set))
         (target-handler (-> fileset (boot/add-resource workspace) boot/commit!))))))
@@ -320,56 +484,10 @@
         (binding [miraj/*debug* debug
                   miraj/*verbose* verbose
                   miraj/*keep* keep
-                  miraj/*pprint* pprint
+                  miraj.co-dom/*pprint* pprint
                   *compile-path* (.getPath workspace)]
           (miraj/link-test-pages namespace-set))
         (target-handler (-> fileset (boot/add-resource workspace) boot/commit!))))))
-
-(defn- compile-page-vars
-  "Compile page vars."
-  [page-var-set opts]
-  (if (:debug opts) (util/info (format "Running fn 'compile-page-vars %s'\n" page-var-set)))
-  (if (:debug opts) (util/info (format "opts: %s\n" opts)))
-  (fn middleware [next-handler]
-    (fn handler [fileset]
-      (let [workspace   (boot/tmp-dir!)
-            target-middleware identity
-            target-handler (target-middleware next-handler)]
-        (doseq [[idx pv] (map-indexed vector page-var-set)]
-          (let [ns (symbol (->  pv namespace))]
-            (binding [miraj/*debug* (:debug opts)
-                      miraj/*verbose* (or (:verbose opts) (:debug opts))
-                      miraj/*keep* (:keep opts)
-                      miraj/*pprint* (or (:debug opts) (:pprint opts))
-                      *compile-path* (.getPath workspace)]
-              (require ns)
-              (miraj/compile-page-ref (find-var pv)))))
-        (target-handler (-> fileset (boot/add-resource workspace) boot/commit!))))))
-
-(defn- compile-page
-  "Compile page."
-  [page-ref opts]
-  (if (:debug opts) (util/info (format "Running fn 'compile-page %s'\n" page-ref)))
-  (if (:debug opts) (util/info (format "opts: %s\n" opts)))
-  (fn middleware [next-handler]
-    (fn handler [fileset]
-      (let [vopts (mapcat identity (into [] opts))
-            _ (util/info (format "VOPTS %s\n" (seq vopts)))
-            workspace   (boot/tmp-dir!)
-            target-middleware identity
-            target-handler (target-middleware next-handler)]
-        (let [ns (if-let [nsp (namespace page-ref)]
-                   (symbol nsp)
-                   ;; must be an ns symbol already
-                   page-ref)]
-            (binding [miraj/*debug* (:debug opts)
-                      miraj/*verbose* (or (:verbose opts) (:debug opts))
-                      miraj/*keep* (:keep opts)
-                      miraj/*pprint* (or (:debug opts) (:pprint opts))
-                      *compile-path* (.getPath workspace)]
-              (require ns :reload)
-              (apply miraj/mcc vopts))
-        (target-handler (-> fileset (boot/add-resource workspace) boot/commit!)))))))
 
 #_(boot/deftask assemble
   "Processes deflibrary vars to link webcomponent libraries."
@@ -390,7 +508,7 @@
           (miraj/assemble-component-lib-for-ns namespace pprint verbose))
         (target-handler (-> fileset (boot/add-resource workspace) boot/commit!))))))
 
-(boot/deftask assetize
+#_(boot/deftask assetize
   "Install assets from miraj dependencies."
   [v verbose bool "Print trace messages"]
 
@@ -429,29 +547,32 @@
    i imports    IMPORTS [str] "Import resources"
    l libraries  bool        "Generate Clojure libraries from webcomponents.edn files."
    m miraj-var  SYM  #{sym} "Compile miraj var."
-   n namespace  NS  #{sym}  "Compile all miraj vars in namespace NS."
-   p pages      bool        "Compile defpage vars"
-   _ page       PAGE sym    "Compile specific page"
-   P polyfill   POLYFILL kw "Compile with polyfill"
+   p pages      PAGES #{sym} "Compile defpages (#{} for all)"
+   P pagespaces NS  #{sym}  "Compile all defpages in pagespace NSs (#{} for all)"
+   ;; _ page       PAGE sym    "Compile specific page"
+   _ pprint     bool        "Pretty print"
+   _ polyfill   POLYFILL kw "Compile with polyfill"
    s styles     bool        "Compile webstyles.edn files."
    t test       bool        "Generate test page."
    v verbose    bool        "verbose"]
-  ;;(let [all (and (empty? namespace) (empty? miraj-var))
+  ;;(let [all (and (empty? pagespace) (empty? miraj-var))
   ;; default: do all components and pages
-  (let [do-components (if components true (if (and (not page) (not pages)
+  (let [do-components (if components true (if (and (not pages)
                                                    (not libraries) (not styles))
                                             true false))
-        do-pages (if pages true (if (and (not components) (not libraries)
-                                         (not page) (not styles))
-                                  true false))
+        do-pages (if (not (nil? pages))
+                   true
+                   (if (and (not components) (not libraries)
+                            (not styles))
+                     true false))
         do-libraries (if libraries true (if (and (not components) (not pages)
-                                                 (not page) (not styles))
+                                                 (not styles))
                                           true false))
         do-styles (if styles true (if (and (not components) (not pages)
-                                           (not page) (not styles))
+                                           (not styles))
                                     true false))
         keep (or keep debug)
-        pprint debug
+        pprint (or pprint debug)
         verbose (or verbose debug)]
     (fn middleware [next-handler]
       (fn handler [fileset]
@@ -468,11 +589,12 @@
                                                             debug keep pprint verbose))
                                    identity)
 
-                                 (if do-pages
-                                   (if namespace
-                                     (compile-page-nss namespace debug #_keep pprint verbose)
-                                     (compile-page-nss (->> fileset boot/fileset-namespaces)
-                                                       debug #_keep pprint verbose))
+                                 (if pages
+                                   (if (empty? pages)
+                                     (compile-pagespaces (assoc (dissoc *opts* :pages)
+                                                                :pagespaces
+                                                              (->> fileset boot/fileset-namespaces)))
+                                     (compile-pages *opts*)) ;; namespace debug #_keep pprint verbose))
                                    identity)
 
                                  (if test (compile-test-pages (->> fileset boot/fileset-namespaces)
@@ -482,16 +604,16 @@
                                  (if do-libraries (compile-libraries verbose) identity)
 
                                  ;; (if (not (empty? namespace))
-                                 ;;   (compile-page-nss namespace pprint verbose)
+                                 ;;   (compile-pages namespace pprint verbose)
                                  ;;   identity)
 
                                  (if styles (compile-styles verbose) identity)
 
-                                 (if page ;; (not (empty? miraj-var))
-                                   (compile-page page *opts*)
-                                   identity)
+                                 ;; (if page ;; (not (empty? miraj-var))
+                                 ;;   (compile-page page *opts*)
+                                 ;;   identity)
 
-                                 (if (or #_all do-components libraries page
+                                 (if (or #_all do-components libraries
                                          do-pages styles miraj-var)
                                    identity
                                    (do
@@ -518,7 +640,7 @@
           (binding [miraj/*debug* debug
                     miraj/*verbose* verbose
                     miraj/*keep* false
-                    miraj/*pprint* pprint
+                    miraj.co-dom/*pprint* pprint
                     *compile-path* (.getPath workspace)]
             (miraj/create-master-demo-page nss))
           (target-handler (-> fileset
@@ -528,11 +650,12 @@
 (boot/deftask link
   "Processes deflibrary vars to link webcomponent libraries."
   [;;p pprint     bool     "Pretty-print generated HTML."
+   a assets     ASSETS kw  "Copy assets from jar to resources dir"
    c components bool       "Link components"
    d debug      bool       "Debug mode - keep, pprint, verbose, etc."
    l libraries  bool       "Link component libraries."
    n namespace  NS  #{sym} "Link all miraj vars in namespace NS."
-   p pages      bool       "Link pages"
+   p pages      NS  #{sym} "Link pages (use #{} for all)"
    t test       bool       "Generate and link test webpage"
    v verbose    bool       "verbose"]
   (let [pprint (or debug false)
@@ -563,10 +686,10 @@
                                    identity)
 
                                  (if do-pages
-                                   (if namespace
-                                     (link-pages namespace #_keep pprint test verbose)
+                                   (if (empty? pages)
                                      (link-pages (->> fileset boot/fileset-namespaces)
-                                                 #_keep pprint test verbose))
+                                                 *opts*) ;; #_keep pprint test verbose))
+                                     (link-pages pages *opts*)) ;; #_keep pprint test verbose)
                                    identity)
 
                                  (if test
@@ -900,3 +1023,9 @@
 ;; ;; (-> (boot/new-fileset)
 ;;         ;;     (boot/add-resource tmp-dir)
 ;;         ;;     boot/commit!)))))
+
+(boot/deftask dummy
+  "pom, jar, install"
+   []
+  identity)
+

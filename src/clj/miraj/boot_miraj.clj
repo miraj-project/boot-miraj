@@ -284,6 +284,7 @@
   ;; FIXME: to support watch loop, only compile changed namespaces
   [opts] ;; debug pprint verbose]
   (let [namespace-set (:pages opts)]
+    (util/info (format "namespace-set: %s\n" (seq namespace-set)))
     (fn middleware [next-handler]
       (fn handler [fileset]
         (if (or (:debug opts) (:verbose opts))
@@ -291,36 +292,41 @@
         (if (or (:debug opts) (:verbose opts))
           (util/info (format "opts %s\n" opts)))
 
-        ;; filter for pagespaces
-        ;; (let [page-nss (filter (fn [maybe-pns]
-        ;;                          (util/info "maybe pagespace %s\n" maybe-pns)
-        ;;                          ;; (clojure.core/remove-ns maybe-pns)
-        ;;                          ;; (clojure.core/require maybe-pns :reload)
-        ;;                          (let [maybe-page-ns (find-ns maybe-pns)
-        ;;                                _ (util/info " maybe pagespace ns %s\n" maybe-page-ns)
-        ;;                                _ (util/info " pagespace meta %s\n"
-        ;;                                             (-> maybe-page-ns clojure.core/meta))
-        ;;                                ps (-> maybe-page-ns clojure.core/meta
-        ;;                                       :miraj/miraj :miraj/pagespace)]
-        ;;                            (util/info "pagespace? %s\n" ps)
-        ;;                            ps))
-        ;;                            namespace-set)]
-        ;;   (util/info (format "Page-Nss: %s\n" (seq page-nss)))
-        (let [workspace (boot/tmp-dir!)
-              target-middleware identity
-              target-handler (target-middleware next-handler)]
-          ;; (if (:debug opts) (clojure.core/require '[miraj.co-dom]
-          ;;                                         '[miraj.core]
-          ;;                                         :reload))
-          (binding [miraj/*debug* (:debug opts)
-                    miraj/*verbose* (or (:debug opts) (:verbose opts))
-                    miraj/*keep* (:keep opts)
-                    miraj.co-dom/*pprint* (or (:debug opts) (:pprint opts))
-                    *compile-path* (.getPath workspace)]
-            ;; (miraj/compile-pages namespace-set #_page-nss opts))
-            ;; (require ns :reload)
-            (miraj/mcc opts))
-          (target-handler (-> fileset (boot/add-resource workspace) boot/commit!)))))))
+        ;; filter for pagespaces/pagenss
+        (let [page-nss (filter (fn [maybe-pns]
+                                 (util/info "maybe pagespace %s\n" maybe-pns)
+                                 ;; (clojure.core/remove-ns maybe-pns)
+                                 (clojure.core/require maybe-pns) ;; :reload)
+                                 (let [maybe-page-ns (find-ns maybe-pns)
+                                       ;; _ (util/info " maybe pagespace ns %s\n" maybe-page-ns)
+                                       ;; _ (util/info " pagespace meta %s\n"
+                                       ;;              (-> maybe-page-ns clojure.core/meta))
+                                       ps (or (-> maybe-page-ns clojure.core/meta
+                                                  :miraj/miraj :miraj/pagespace)
+                                              (-> maybe-page-ns clojure.core/meta
+                                                  :miraj/miraj :miraj/defpage))]
+                                   (util/info "pagespace? %s\n" ps)
+                                   ps))
+                                   namespace-set)
+              opts (assoc opts :pages page-nss)
+              ]
+           (util/info (format "Page-Nss: %s\n" (seq page-nss)))
+           (if page-nss
+             (let [workspace (boot/tmp-dir!)
+                   target-middleware identity
+                   target-handler (target-middleware next-handler)]
+               ;; (if (:debug opts) (clojure.core/require '[miraj.co-dom]
+               ;;                                         '[miraj.core]
+               ;;                                         :reload))
+               (binding [miraj/*debug* (:debug opts)
+                         miraj/*verbose* (or (:debug opts) (:verbose opts))
+                         miraj/*keep* (:keep opts)
+                         miraj.co-dom/*pprint* (or (:debug opts) (:pprint opts))
+                         *compile-path* (.getPath workspace)]
+                 ;; (miraj/compile-pages namespace-set #_page-nss opts))
+                 ;; (require ns :reload)
+                 (miraj/mcc opts))
+               (target-handler (-> fileset (boot/add-resource workspace) boot/commit!)))))))))
 
 (defn- compile-pagespaces
   "Compile pagespaces"

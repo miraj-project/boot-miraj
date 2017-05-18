@@ -284,33 +284,36 @@
   ;; FIXME: to support watch loop, only compile changed namespaces
   [opts] ;; debug pprint verbose]
   (let [namespace-set (:pages opts)]
-    (util/info (format "namespace-set: %s\n" (seq namespace-set)))
+    ;; (util/info (format "namespace-set: %s\n" (seq namespace-set)))
     (fn middleware [next-handler]
       (fn handler [fileset]
-        (if (or (:debug opts) (:verbose opts))
-          (util/info (format "Running fn 'compile-pages' for %s\n" opts)))
-        (if (or (:debug opts) (:verbose opts))
-          (util/info (format "opts %s\n" opts)))
+        ;; (if (or (:debug opts) (:verbose opts))
+        ;;   (util/info (format "Running fn 'compile-pages' for %s\n" opts)))
+        ;; (if (or (:debug opts) (:verbose opts))
+        ;;   (util/info (format "opts %s\n" opts)))
 
         ;; filter for pagespaces/pagenss
-        (let [page-nss (filter (fn [maybe-pns]
-                                 (util/info "maybe pagespace %s\n" maybe-pns)
-                                 ;; (clojure.core/remove-ns maybe-pns)
-                                 (clojure.core/require maybe-pns) ;; :reload)
-                                 (let [maybe-page-ns (find-ns maybe-pns)
-                                       ;; _ (util/info " maybe pagespace ns %s\n" maybe-page-ns)
-                                       ;; _ (util/info " pagespace meta %s\n"
-                                       ;;              (-> maybe-page-ns clojure.core/meta))
-                                       ps (or (-> maybe-page-ns clojure.core/meta
-                                                  :miraj/miraj :miraj/pagespace)
-                                              (-> maybe-page-ns clojure.core/meta
-                                                  :miraj/miraj :miraj/defpage))]
-                                   (util/info "pagespace? %s\n" ps)
-                                   ps))
-                                   namespace-set)
+        (let [page-nss namespace-set
+              ;; page-nss (filter (fn [maybe-pns]
+              ;;                    (util/info "maybe pagespace %s\n" maybe-pns (var? maybe-pns))
+              ;;                    ;; (clojure.core/remove-ns maybe-pns)
+              ;;                    (clojure.core/require (if (var? maybe-pns)
+              ;;                                            (-> maybe-pns meta :ns)
+              ;;                                            maybe-pns)) ;; :reload)
+              ;;                    (let [maybe-page-ns (find-ns maybe-pns)
+              ;;                          ;; _ (util/info " maybe pagespace ns %s\n" maybe-page-ns)
+              ;;                          ;; _ (util/info " pagespace meta %s\n"
+              ;;                          ;;              (-> maybe-page-ns clojure.core/meta))
+              ;;                          ps (or (-> maybe-page-ns clojure.core/meta
+              ;;                                     :miraj/miraj :miraj/pagespace)
+              ;;                                 (-> maybe-page-ns clojure.core/meta
+              ;;                                     :miraj/miraj :miraj/defpage))]
+              ;;                      (util/info "pagespace? %s\n" ps)
+              ;;                      ps))
+              ;;                      namespace-set)
               opts (assoc opts :pages page-nss)
               ]
-           (util/info (format "Page-Nss: %s\n" (seq page-nss)))
+           ;; (util/info (format "Page-Nss: %s\n" (seq page-nss)))
            (if page-nss
              (let [workspace (boot/tmp-dir!)
                    target-middleware identity

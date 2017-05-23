@@ -8,8 +8,8 @@
  ;;:source-paths #{"src/clj"}
 
  ;; needed for developing core and co-com?
- ;; :checkouts '[[miraj/core "0.1.0-SNAPSHOT"]
- ;;             [miraj/co-dom "0.1.0-SNAPSHOT"]]
+ ;; :checkouts '[[miraj/co-dom "1.0.0-SNAPSHOT"]
+ ;;              [miraj/core "0.1.0-SNAPSHOT"]]
 
  :repositories #(conj % ["clojars" {:url "https://clojars.org/repo/"}])
 
@@ -73,6 +73,13 @@
 #_(deftask run-tests []
   (comp
    (test :namespaces #{'less4clj.core-test 'less4clj.webjars-test})))
+
+(deftask build
+  "build"
+  []
+  (comp (pom)
+        (jar)
+        (install)))
 
 (deftask dev
   "watch etc."

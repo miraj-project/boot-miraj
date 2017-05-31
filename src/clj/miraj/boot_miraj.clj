@@ -261,7 +261,7 @@
                   miraj/*keep* (:keep opts)
                   miraj.co-dom/*pprint* (:pprint opts)
                   *compile-path* (.getPath workspace)]
-          (miraj/link-libraries (:libraries opts)))
+          (miraj/link-libraries opts))
         (target-handler (-> fileset
                             (add-handler workspace)
                             boot/commit!))))))
@@ -479,6 +479,24 @@
                             (boot/add-resource workspace)
                             boot/commit!))))))
 
+(defn- compile-demo-page
+  "Generate test pages for component libs"
+  [opts]
+  (fn middleware [next-handler]
+    (fn handler [fileset]
+      (if (:verbose opts) (util/info (format "Running fn 'compile-demo-page' for %s\n" opts)))
+      (let [workspace (boot/tmp-dir!)
+            target-middleware identity
+            target-handler (target-middleware next-handler)]
+        (binding [miraj/*debug* (:debug opts)
+                  miraj/*verbose* (or (:debug opts) :verbose opts)
+                  miraj/*keep* (:keep opts)
+                  miraj.co-dom/*pprint* (or (:debug opts) (:pprint opts))
+                  *compile-path* (.getPath workspace)]
+          (miraj/compile-demo-page opts))
+        (target-handler (-> fileset (boot/add-resource workspace) boot/commit!))))))
+
+;; OBSOLETE?
 (defn- compile-test-pages
   "Generate test pages for component libs"
   [namespace-set keep pprint verbose]
@@ -579,12 +597,38 @@
           (pod/unpack-jar webjar out-dir)))
       (-> fileset (boot/add-asset workspace :exclude [#"META-INF.*"]) boot/commit!))))
 
+(boot/deftask demo-page
+  "Generate a master demo page for a component library."
+  [d debug    bool       "debug"
+   p pprint   bool       "pprint"
+   v verbose  bool       "verbose"]
+  (if verbose (util/info (format "Running task 'demo-page'\n")))
+  (let [pprint (or debug false)
+        verbose (or debug verbose)]
+    (fn middleware [next-handler]
+      (fn handler [fileset]
+        (let [workspace   (boot/tmp-dir!)
+              nss (->> fileset boot/fileset-namespaces)
+              _ (util/info (format "NSS %s\n" (seq nss)))
+              target-middleware identity
+              target-handler (target-middleware next-handler)]
+          (binding [miraj/*debug* debug
+                    miraj/*verbose* verbose
+                    miraj/*keep* false
+                    miraj.co-dom/*pprint* pprint
+                    *compile-path* (.getPath workspace)]
+            (miraj/create-master-demo-page nss))
+          (target-handler (-> fileset
+                              (boot/add-resource workspace)
+                              boot/commit!)))))))
+
 (boot/deftask compile
   "Compile miraj components, pages, etc. Default is to compile
   everything in all namespaces. Use -m to compile one miraj var, -n to
   compile all miraj vars in a namespace."
   [c components COMPS #{sym}      "Compile webcomponents."
    d debug      bool        "Debug mode - pretty-print, keep, etc."
+   _ demo       LIB   sym "Compile demo page for component lib LIB"
    k keep       bool        "Keep transient work products (e.g. cljs files)."
    i imports    IMPORTS [str] "Import resources"
    l libraries  bool        "Generate Clojure libraries from webcomponents.edn files."
@@ -673,6 +717,10 @@
                                      (compile-components opts))
                                    identity)
 
+                                 (if demo
+                                   (compile-demo-page opts)
+                                   identity)
+
                                  (if pages
                                    (if (empty? pages)
                                      (compile-pagespaces (assoc (dissoc opts :pages)
@@ -697,7 +745,7 @@
                                  ;;   (compile-page page opts)
                                  ;;   identity)
 
-                                 (if (or components libraries
+                                 (if (or components libraries demo
                                          pages styles miraj-var)
                                    identity
                                    (do
@@ -705,31 +753,6 @@
                                      identity)))
               target-handler (target-middleware next-handler)]
           (target-handler fileset))))))
-
-(boot/deftask demo-page
-  "Generate a master demo page for a component library."
-  [d debug    bool       "debug"
-   p pprint   bool       "pprint"
-   v verbose  bool       "verbose"]
-  (if verbose (util/info (format "Running task 'demo-page'\n")))
-  (let [pprint (or debug false)
-        verbose (or debug verbose)]
-    (fn middleware [next-handler]
-      (fn handler [fileset]
-        (let [workspace   (boot/tmp-dir!)
-              nss (->> fileset boot/fileset-namespaces)
-              _ (util/info (format "NSS %s\n" (seq nss)))
-              target-middleware identity
-              target-handler (target-middleware next-handler)]
-          (binding [miraj/*debug* debug
-                    miraj/*verbose* verbose
-                    miraj/*keep* false
-                    miraj.co-dom/*pprint* pprint
-                    *compile-path* (.getPath workspace)]
-            (miraj/create-master-demo-page nss))
-          (target-handler (-> fileset
-                              (boot/add-resource workspace)
-                              boot/commit!)))))))
 
 (boot/deftask link
   "Processes deflibrary vars to link webcomponent libraries."
@@ -744,8 +767,10 @@
    t test       bool       "Generate and link test webpage"
    v verbose    bool       "verbose"]
   (if (or debug verbose) (util/info "Running task 'link' with %s\n" *opts*))
-  (let [pprint (or debug false)
-        verbose (or debug verbose)]
+  (let [opts (assoc *opts*
+                    :keep (or keep debug)
+                    :pprint (or pprint debug)
+                    :verbose (or verbose debug))]
     (fn middleware [next-handler]
       (fn handler [fileset]
         (let [do-components (if components true (if (and (not libraries) (not pages))
@@ -765,17 +790,17 @@
 
                                  (if libraries
                                    (if (empty? libraries)
-                                     (link-libraries (assoc *opts*
+                                     (link-libraries (assoc opts
                                                             :libraries
                                                             (->> fileset boot/fileset-namespaces)))
-                                     (link-libraries namespace keep debug pprint verbose))
+                                     (link-libraries opts))
                                    identity)
 
                                  (if do-pages
                                    (if (empty? pages)
                                      (link-pages (->> fileset boot/fileset-namespaces)
-                                                 *opts*) ;; #_keep pprint test verbose))
-                                     (link-pages pages *opts*)) ;; #_keep pprint test verbose)
+                                                 opts) ;; #_keep pprint test verbose))
+                                     (link-pages pages opts)) ;; #_keep pprint test verbose)
                                    identity)
 
                                  (if test

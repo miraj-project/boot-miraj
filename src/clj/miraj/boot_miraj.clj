@@ -43,7 +43,7 @@
 ;; FIXME: move mustache template etc. to core/compiler.clj
 (defn- compile-libraries
   [verbose]
-  (if verbose (util/info "Running fn 'compile-libraries'\n"))
+  ;; (if verbose (util/info "Running fn 'compile-libraries'\n"))
   (fn middleware [next-handler]
     (fn handler [fileset]
       (let [workspace (boot/tmp-dir!)
@@ -69,12 +69,12 @@
             (if verbose (util/info "Emitting %s\n" library-out-file))
             (spit library-out-file content)))
         (target-handler (-> fileset
-                            (boot/add-source workspace)
+                            (boot/add-resource workspace)
                             boot/commit!))))))
 
 (defn- compile-extensions
   [verbose]
-  (if verbose (util/info "Running fn 'compile-extentions'\n"))
+  ;; (if verbose (util/info "Running fn 'compile-extentions'\n"))
   (fn middleware [next-handler]
     (fn handler [fileset]
       (let [workspace (boot/tmp-dir!)
@@ -162,8 +162,8 @@
   [opts]
   (fn middleware [next-handler]
     (fn handler [fileset]
-      (if (or (:debug opts) (:verbose opts))
-        (util/info (format "Running fn 'compile-components' for %s\n" opts)))
+      ;; (if (or (:debug opts) (:verbose opts))
+      ;;   (util/info (format "Running fn 'compile-components' for %s\n" opts)))
       (let [;; namespace-set (:components opts)
             html-workspace (boot/tmp-dir!)
             cljs-workspace (boot/tmp-dir!)
@@ -191,8 +191,8 @@
 (defn- compile-component-nss
   "Compile webcomponent namespaces."
   [opts] ;; debug keep pprint verbose]
-  (if (or (:debug opts) (:verbose opts))
-    (util/info (format "Running fn 'compile-component-nss' for %s\n" opts)))
+  ;; (if (or (:debug opts) (:verbose opts))
+  ;;   (util/info (format "Running fn 'compile-component-nss' for %s\n" opts)))
   (fn middleware [next-handler]
     (fn handler [fileset]
       (let [html-workspace (boot/tmp-dir!)
@@ -248,7 +248,7 @@
   [opts]
   (fn middleware [next-handler]
     (fn handler [fileset]
-      (if (:verbose opts) (util/info (format "Running fn 'link-libraries' for %s\n" opts)))
+      ;; (if (:verbose opts) (util/info (format "Running fn 'link-libraries' for %s\n" opts)))
       (let [workspace (boot/tmp-dir!)
             ;; html-workspace (boot/tmp-dir!)
             ;; cljs-workspace (boot/tmp-dir!)
@@ -269,8 +269,8 @@
 (defn- compile-page-vars
   "Compile page vars."
   [page-var-set opts]
-  (if (:debug opts) (util/info (format "Running fn 'compile-page-vars %s'\n" page-var-set)))
-  (if (:debug opts) (util/info (format "opts: %s\n" opts)))
+  ;; (if (:debug opts) (util/info (format "Running fn 'compile-page-vars %s'\n" page-var-set)))
+  ;; (if (:debug opts) (util/info (format "opts: %s\n" opts)))
   (fn middleware [next-handler]
     (fn handler [fileset]
       (let [workspace   (boot/tmp-dir!)
@@ -371,8 +371,8 @@
   (let [namespace-set (:pages opts)]
     (fn middleware [next-handler]
       (fn handler [fileset]
-        (if (or (:debug opts) (:verbose opts))
-          (util/info (format "Running fn 'compile-pagespaces' for %s\n" opts)))
+        ;; (if (or (:debug opts) (:verbose opts))
+        ;;   (util/info (format "Running fn 'compile-pagespaces' for %s\n" opts)))
         (if (or (:debug opts) (:verbose opts))
           (util/info (format "opts %s\n" opts)))
 
@@ -438,7 +438,7 @@
   [namespace-set opts] ;; debug pprint verbose]
   (fn middleware [next-handler]
     (fn handler [fileset]
-      (if (:verbose opts) (util/info (format "Running fn 'link-pages' for %s\n" namespace-set)))
+      ;; (if (:verbose opts) (util/info (format "Running fn 'link-pages' for %s\n" namespace-set)))
       (let [workspace (boot/tmp-dir!)
             assets-workspace (boot/tmp-dir!)
             target-middleware identity
@@ -484,7 +484,7 @@
   [opts]
   (fn middleware [next-handler]
     (fn handler [fileset]
-      (if (:verbose opts) (util/info (format "Running fn 'compile-demo-page' for %s\n" opts)))
+      ;; (if (:verbose opts) (util/info (format "Running fn 'compile-demo-page' for %s\n" opts)))
       (let [workspace (boot/tmp-dir!)
             target-middleware identity
             target-handler (target-middleware next-handler)]
@@ -502,7 +502,7 @@
   [namespace-set keep pprint verbose]
   (fn middleware [next-handler]
     (fn handler [fileset]
-      (if verbose (util/info (format "Running fn 'compile-test-pages' for %s\n" namespace-set)))
+      ;; (if verbose (util/info (format "Running fn 'compile-test-pages' for %s\n" namespace-set)))
       (let [workspace (boot/tmp-dir!)
             target-middleware identity
             target-handler (target-middleware next-handler)]
@@ -519,7 +519,7 @@
   [namespace-set debug keep pprint verbose]
   (fn middleware [next-handler]
     (fn handler [fileset]
-      (if verbose (util/info (format "Running fn 'link-lib-testpage' for %s\n" namespace-set)))
+      ;; (if verbose (util/info (format "Running fn 'link-lib-testpage' for %s\n" namespace-set)))
       (let [workspace (boot/tmp-dir!)
             target-middleware identity
             target-handler (target-middleware next-handler)]
@@ -537,7 +537,7 @@
   [namespace-set debug keep pprint verbose]
   (fn middleware [next-handler]
     (fn handler [fileset]
-      (if verbose (util/info (format "Running fn 'link-test-pages' for %s\n" namespace-set)))
+      ;; (if verbose (util/info (format "Running fn 'link-test-pages' for %s\n" namespace-set)))
       (let [workspace (boot/tmp-dir!)
             target-middleware identity
             target-handler (target-middleware next-handler)]
@@ -644,7 +644,6 @@
    v verbose    bool        "verbose"]
   ;;(let [all (and (empty? pagespace) (empty? miraj-var))
   ;; default: do all components and pages
-  (if (or debug verbose) (util/info "Running task 'compile' with %s\n" *opts*))
   (let [
         ;; pod-env (update-in (boot/get-env) [:dependencies]
         ;;                    conj '[boot/core "RELEASE"]
@@ -687,6 +686,9 @@
                     :verbose (or verbose debug))]
     (fn middleware [next-handler]
       (fn handler [fileset]
+        (if (or (:debug *opts*) (:verbose *opts*))
+          (util/info "Running task 'compile' with %s\n" *opts*))
+
         #_(pod/with-eval-in @pod
           (require '[boot.core :as boot]
                    '[boot.task.built-in :as builtin]
@@ -766,13 +768,13 @@
    _ pprint     bool        "Pretty print"
    t test       bool       "Generate and link test webpage"
    v verbose    bool       "verbose"]
-  (if (or debug verbose) (util/info "Running task 'link' with %s\n" *opts*))
   (let [opts (assoc *opts*
                     :keep (or keep debug)
                     :pprint (or pprint debug)
                     :verbose (or verbose debug))]
     (fn middleware [next-handler]
       (fn handler [fileset]
+        (if (or (:debug *opts*) (:verbose *opts*)) (util/info "Running task 'link' with %s\n" *opts*))
         (let [do-components (if components true (if (and (not libraries) (not pages))
                                                          true false))
               do-libraries (if libraries true (if (and (not components) (not pages))

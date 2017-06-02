@@ -9,13 +9,13 @@
 
  ;; needed for developing core and co-com?
  ;; :checkouts '[[miraj/co-dom "1.0.0-SNAPSHOT"]
- ;;              [miraj/core "0.1.0-SNAPSHOT"]]
+ ;;              [miraj/core "1.0.0-SNAPSHOT"]]
 
  :repositories #(conj % ["clojars" {:url "https://clojars.org/repo/"}])
 
- :dependencies   '[[org.clojure/clojure "1.9.0-alpha16"]
-                   [miraj/core "0.1.0-SNAPSHOT"]
-                   [miraj/co-dom "0.1.0-SNAPSHOT"]
+ :dependencies   '[[org.clojure/clojure "1.9.0-alpha17"]
+                   [miraj/core "1.0.0-SNAPSHOT"]
+                   [miraj/co-dom "1.0.0-SNAPSHOT"]
                    [stencil "0.5.0"]
 
                    [org.clojure/tools.namespace "0.2.11"]

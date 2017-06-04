@@ -38,7 +38,8 @@
        :description "Boot for miraj"
        :url         "https://github.com/miraj-project/boot-miraj.git"
        :scm         {:url "https://github.com/miraj-project/boot-miraj.git"}
-       :license     {"EPL" "http://www.eclipse.org/legal/epl-v10.html"}})
+       :license     {"EPL" "http://www.eclipse.org/legal/epl-v10.html"}}
+ push {:repo "clojars"})
 
 (defn with-files
   "Runs middleware with filtered fileset and merges the result back into complete fileset."
@@ -78,8 +79,20 @@
   "build"
   []
   (comp (pom)
-        (jar)
+        (jar)))
+
+(deftask install-local
+  "Build and install component libraries"
+  []
+  (comp (build)
+        (target)
         (install)))
+
+(deftask deploy
+  "deploy to clojars"
+  []
+  (comp (install-local)
+        (push)))
 
 (deftask dev
   "watch etc."

@@ -248,7 +248,7 @@
   [opts]
   (fn middleware [next-handler]
     (fn handler [fileset]
-      ;; (if (:verbose opts) (util/info (format "Running fn 'link-libraries' for %s\n" opts)))
+      (if (:verbose opts) (util/info (format "Running fn 'link-libraries' for %s\n" opts)))
       (let [workspace (boot/tmp-dir!)
             ;; html-workspace (boot/tmp-dir!)
             ;; cljs-workspace (boot/tmp-dir!)
@@ -264,7 +264,13 @@
           (miraj/link-libraries opts))
         (target-handler (-> fileset
                             (add-handler workspace)
-                            boot/commit!))))))
+                            boot/commit!))
+        (doseq [lib (:libraries opts)]
+          (let [lib-ns (if (namespace lib)
+                         (symbol (str (namespace lib) "." (name lib)))
+                         lib)]
+            (util/info "reloading lib: " lib-ns)
+            (clojure.core/require [lib-ns] :reload)))))))
 
 (defn- compile-page-vars
   "Compile page vars."
@@ -435,10 +441,10 @@
 
 (defn- link-pages
   "link page namespaces"
-  [namespace-set opts] ;; debug pprint verbose]
+  [opts] ;; debug pprint verbose]
   (fn middleware [next-handler]
     (fn handler [fileset]
-      ;; (if (:verbose opts) (util/info (format "Running fn 'link-pages' for %s\n" namespace-set)))
+      ;; (if (:verbose opts) (util/info (format "Running fn 'link-pages' for %s\n" opts)))
       (let [workspace (boot/tmp-dir!)
             assets-workspace (boot/tmp-dir!)
             target-middleware identity
@@ -474,7 +480,7 @@
                   miraj/*keep* (:keep opts)
                   miraj.co-dom/*pprint* (or (:debug opts) (:pprint opts))
                   *compile-path* (.getPath workspace)]
-          (miraj/link-pages namespace-set opts))
+          (miraj/link-pages opts))
         (target-handler (-> newfs
                             (boot/add-resource workspace)
                             boot/commit!))))))
@@ -514,7 +520,7 @@
           (miraj/create-test-pages namespace-set))
         (target-handler (-> fileset (boot/add-resource workspace) boot/commit!))))))
 
-(defn- link-lib-testpage
+#_(defn- link-lib-testpage
   "Generate and link test page for component lib"
   [namespace-set debug keep pprint verbose]
   (fn middleware [next-handler]
@@ -688,7 +694,6 @@
       (fn handler [fileset]
         (if (or (:debug *opts*) (:verbose *opts*))
           (util/info "Running task 'compile' with %s\n" *opts*))
-
         #_(pod/with-eval-in @pod
           (require '[boot.core :as boot]
                    '[boot.task.built-in :as builtin]
@@ -762,6 +767,7 @@
    a assets     ASSETS kw  "Copy assets from jar to resources dir"
    c components bool       "Link components"
    d debug      bool       "Debug mode - keep, pprint, verbose, etc."
+   k keep       bool        "Keep transient work products (e.g. cljs files)."
    l libraries  LIBS #{sym} "Link component libraries."
    n namespace  NS  #{sym} "Link all miraj vars in namespace NS."
    p pages      NS  #{sym} "Link pages (use #{} for all)"
@@ -779,8 +785,8 @@
                                                          true false))
               do-libraries (if libraries true (if (and (not components) (not pages))
                                                 true false))
-              do-pages (if pages true (if (and (not components) (not libraries))
-                                        true false))
+              ;; do-pages (if pages true (if (and (not components) (not libraries))
+              ;;                           true false))
               workspace (boot/tmp-dir!)
               target-middleware (comp
                                  (if do-components
@@ -798,14 +804,18 @@
                                      (link-libraries opts))
                                    identity)
 
-                                 (if do-pages
+                                 (if pages
                                    (if (empty? pages)
-                                     (link-pages (->> fileset boot/fileset-namespaces)
-                                                 opts) ;; #_keep pprint test verbose))
-                                     (link-pages pages opts)) ;; #_keep pprint test verbose)
+                                     ;; (link-pages (->> fileset boot/fileset-namespaces)
+                                     ;;             opts)
+                                     (link-pages (assoc
+                                                  (dissoc opts :pages)
+                                                  :pages
+                                                  (->> fileset boot/fileset-namespaces)))
+                                     (link-pages opts))
                                    identity)
 
-                                 (if test
+                                 #_(if test
                                    (if do-libraries
                                      (link-lib-testpage (->> fileset boot/fileset-namespaces)
                                                         debug keep pprint verbose)
@@ -813,7 +823,8 @@
                                        (link-test-pages (->> fileset boot/fileset-namespaces)
                                                         debug keep pprint verbose)
                                        identity))
-                                   identity))
+                                   identity)
+                                 )
 
               target-handler (target-middleware next-handler)]
           (target-handler fileset))))))
